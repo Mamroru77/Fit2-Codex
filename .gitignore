@@ -1,0 +1,24 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+artifacts/
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+
+# IDE / editor
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+
+# Local machine scratch
+.tmp-setup/
+
+# Local agent workspace data (memory, not project source)
+.workbuddy-ai/
