@@ -232,6 +232,40 @@ public class CodexRpcClientTests
             () => client.CallAsync<JsonElement>("account/read", null, CancellationToken.None).WaitAsync(TestTimeout));
     }
 
+    /// <summary>
+    /// A deterministic reproduction of the terminal/pending registration race would need a
+    /// production hook between <c>ThrowIfTerminal()</c> and <c>_pending.TryAdd</c>, so the invariant
+    /// is recorded here and enforced by the post-registration re-check in the client instead:
+    /// <list type="bullet">
+    /// <item>terminal established before registration -&gt; the re-check removes and fails the entry;</item>
+    /// <item>terminal established after registration -&gt; <c>FaultPending</c> sees and fails it.</item>
+    /// </list>
+    /// No interleaving may leave a request pending after a permanent connection failure.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsyncFailsAfterTheConnectionBecomesTerminal()
+    {
+        var transport = new FakeJsonRpcTransport();
+        await using var client = new CodexRpcClient(transport);
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
+
+        transport.EnqueueLine("not json at all");
+
+        await Assert.ThrowsAnyAsync<JsonException>(async () =>
+        {
+            await foreach (var notification in client.Notifications(timeout.Token))
+            {
+            }
+        });
+
+        // The handshake succeeded once, but the connection is now permanently dead, so
+        // InitializeAsync must not report success just because the flag is still set.
+        await Assert.ThrowsAnyAsync<JsonException>(
+            () => client.InitializeAsync(CancellationToken.None).WaitAsync(TestTimeout));
+    }
+
     [Fact]
     public async Task DisposingTheClientFailsPendingRequestsInsteadOfLeavingThemHanging()
     {

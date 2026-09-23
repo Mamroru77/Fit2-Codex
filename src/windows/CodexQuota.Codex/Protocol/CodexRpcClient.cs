@@ -59,6 +59,11 @@ public sealed class CodexRpcClient : IAsyncDisposable
 
         try
         {
+            // A connection that has permanently failed must never report handshake success merely
+            // because the handshake succeeded earlier, so the terminal check runs inside the gate
+            // and before the already-initialized early return.
+            ThrowIfTerminal();
+
             if (_initialized)
             {
                 return;
@@ -123,6 +128,21 @@ public sealed class CodexRpcClient : IAsyncDisposable
         if (!_pending.TryAdd(id, completion))
         {
             throw new InvalidOperationException($"Request id {id} is already pending.");
+        }
+
+        // Close the terminal/pending registration race. ThrowIfTerminal() above and this
+        // registration are not atomic with respect to a connection failure, so without this check a
+        // failure recorded in between would drain _pending before this entry existed and the
+        // request would wait forever. Fault() always records the terminal exception before
+        // FaultPending() drains _pending, therefore:
+        //   - terminal established before this check -> detected here: the entry is removed and the
+        //     caller fails immediately;
+        //   - terminal established after this check -> FaultPending() sees the entry and fails it.
+        // No interleaving can leave a request pending after a permanent connection failure.
+        if (_terminalException is { } terminal)
+        {
+            _pending.TryRemove(id, out _);
+            throw terminal;
         }
 
         try
