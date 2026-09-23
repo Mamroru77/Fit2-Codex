@@ -9,6 +9,11 @@ namespace CodexQuota.Codex.Protocol;
 /// responses by id, and exposes server-initiated notifications (messages with a <c>method</c> and
 /// no <c>id</c>) through a channel.
 /// </summary>
+/// <remarks>
+/// The connection has three states: before the handshake, established, and terminal. Once the read
+/// loop has ended or faulted, or the client has been disposed, the connection is terminal and every
+/// further request fails immediately instead of waiting for a response that cannot arrive.
+/// </remarks>
 public sealed class CodexRpcClient : IAsyncDisposable
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
@@ -27,9 +32,12 @@ public sealed class CodexRpcClient : IAsyncDisposable
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> _pending = new();
     private readonly Channel<CodexNotification> _notifications = Channel.CreateUnbounded<CodexNotification>();
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly SemaphoreSlim _initGate = new(1, 1);
     private readonly Task _readLoop;
 
     private long _nextRequestId;
+    private volatile bool _initialized;
+    private volatile Exception? _terminalException;
 
     public CodexRpcClient(IJsonRpcTransport transport)
     {
@@ -41,20 +49,73 @@ public sealed class CodexRpcClient : IAsyncDisposable
 
     /// <summary>
     /// Performs the App Server handshake: one <c>initialize</c> request, and only once its
-    /// response has arrived, one <c>initialized</c> notification.
+    /// response has arrived, one <c>initialized</c> notification. Concurrent callers take part in
+    /// the same single handshake; a caller that arrives once it has completed returns without
+    /// sending anything.
     /// </summary>
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
-        await CallAsync<JsonElement>("initialize", InitializeParameters, cancellationToken).ConfigureAwait(false);
-        await _transport.WriteLineAsync(BuildNotification("initialized", null), cancellationToken).ConfigureAwait(false);
+        await _initGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (_initialized)
+            {
+                return;
+            }
+
+            await SendRequestAsync<JsonElement>("initialize", InitializeParameters, cancellationToken).ConfigureAwait(false);
+            await _transport.WriteLineAsync(BuildNotification("initialized", null), cancellationToken).ConfigureAwait(false);
+
+            _initialized = true;
+        }
+        finally
+        {
+            _initGate.Release();
+        }
     }
 
     /// <summary>
-    /// Sends one request and completes with its correlated result.
+    /// Sends one ordinary request and completes with its correlated result. Requires the handshake
+    /// to have completed.
     /// </summary>
-    public async Task<T> CallAsync<T>(string method, object? @params, CancellationToken cancellationToken)
+    public Task<T> CallAsync<T>(string method, object? @params, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(method);
+
+        if (!_initialized)
+        {
+            throw new InvalidOperationException(
+                $"The Codex App Server handshake has not completed, so '{method}' cannot be sent yet.");
+        }
+
+        return SendRequestAsync<T>(method, @params, cancellationToken);
+    }
+
+    /// <summary>
+    /// Streams notifications until the client is disposed or the transport fails.
+    /// </summary>
+    public IAsyncEnumerable<CodexNotification> Notifications(CancellationToken cancellationToken)
+        => _notifications.Reader.ReadAllAsync(cancellationToken);
+
+    public async ValueTask DisposeAsync()
+    {
+        await _shutdown.CancelAsync().ConfigureAwait(false);
+        _notifications.Writer.TryComplete();
+
+        await _readLoop.ConfigureAwait(false);
+
+        _shutdown.Dispose();
+        _initGate.Dispose();
+    }
+
+    /// <summary>
+    /// The raw correlated JSON-RPC request primitive. It carries no initialization requirement, so
+    /// the handshake itself can use it without any special case in the ordinary call path.
+    /// </summary>
+    private async Task<T> SendRequestAsync<T>(string method, object? @params, CancellationToken cancellationToken)
+    {
+        ThrowIfTerminal();
 
         var id = Interlocked.Increment(ref _nextRequestId);
         var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -79,22 +140,6 @@ public sealed class CodexRpcClient : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Streams notifications until the client is disposed or the transport fails.
-    /// </summary>
-    public IAsyncEnumerable<CodexNotification> Notifications(CancellationToken cancellationToken)
-        => _notifications.Reader.ReadAllAsync(cancellationToken);
-
-    public async ValueTask DisposeAsync()
-    {
-        await _shutdown.CancelAsync().ConfigureAwait(false);
-        _notifications.Writer.TryComplete();
-
-        await _readLoop.ConfigureAwait(false);
-
-        _shutdown.Dispose();
-    }
-
     private async Task ReadLoopAsync()
     {
         try
@@ -109,7 +154,13 @@ public sealed class CodexRpcClient : IAsyncDisposable
         }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
         {
+            // Disposal is terminal too: no response can arrive afterwards, so waiting callers must
+            // fail instead of hanging. Notification readers still end cleanly.
             _notifications.Writer.TryComplete();
+
+            var disposed = new ObjectDisposedException(nameof(CodexRpcClient));
+            _terminalException = disposed;
+            FaultPending(disposed);
         }
         catch (Exception exception)
         {
@@ -174,16 +225,40 @@ public sealed class CodexRpcClient : IAsyncDisposable
         completion.TrySetException(new JsonException($"Response {id} carries neither a result nor an error."));
     }
 
+    /// <summary>
+    /// Records a permanent failure: the notification channel ends with the exception, waiting
+    /// callers are faulted, and later requests fail immediately instead of being queued into a
+    /// pending set that nobody will ever complete.
+    /// </summary>
     private void Fault(Exception exception)
     {
+        _terminalException = exception;
         _notifications.Writer.TryComplete(exception);
+        FaultPending(exception);
+    }
 
+    /// <summary>
+    /// Fails every waiting caller. Used when the transport dies and when the client is disposed:
+    /// in both cases no response can arrive any more, so calls must not stay pending.
+    /// </summary>
+    private void FaultPending(Exception exception)
+    {
         foreach (var id in _pending.Keys.ToArray())
         {
             if (_pending.TryRemove(id, out var completion))
             {
                 completion.TrySetException(exception);
             }
+        }
+    }
+
+    private void ThrowIfTerminal()
+    {
+        var terminal = _terminalException;
+
+        if (terminal is not null)
+        {
+            throw terminal;
         }
     }
 

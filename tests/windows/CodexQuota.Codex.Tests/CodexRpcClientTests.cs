@@ -57,23 +57,82 @@ public class CodexRpcClientTests
     }
 
     [Fact]
+    public async Task CallAsyncBeforeInitializationIsRejected()
+    {
+        var transport = new FakeJsonRpcTransport();
+        await using var client = new CodexRpcClient(transport);
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        // CancellationToken.None on purpose: only an immediate rejection can end this call, and
+        // WaitAsync bounds the RED state instead of letting it hang the whole test run.
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.CallAsync<JsonElement>("account/read", null, CancellationToken.None).WaitAsync(TestTimeout));
+
+        // Rejection must happen before anything is written, or the wire order is already broken.
+        Assert.Empty(transport.WrittenLines);
+    }
+
+    [Fact]
+    public async Task ConcurrentInitializeAsyncCallsProduceExactlyOneHandshake()
+    {
+        var transport = new FakeJsonRpcTransport();
+        await using var client = new CodexRpcClient(transport);
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        var first = client.InitializeAsync(timeout.Token);
+        var second = client.InitializeAsync(timeout.Token);
+
+        await transport.WaitForWritesAsync(1, timeout.Token);
+
+        // The second caller must not have emitted its own initialize request.
+        Assert.Single(transport.WrittenLines);
+
+        transport.EnqueueLine("""{"id":1,"result":{}}""");
+
+        await Task.WhenAll(first, second).WaitAsync(TestTimeout);
+
+        // Exactly one initialize request followed by exactly one initialized notification.
+        Assert.Equal(2, transport.WrittenLines.Count);
+        Assert.Equal("initialize", Parse(transport.WrittenLines[0]).GetProperty("method").GetString());
+        Assert.Equal("initialized", Parse(transport.WrittenLines[1]).GetProperty("method").GetString());
+    }
+
+    [Fact]
+    public async Task InitializeAsyncAfterSuccessDoesNotEmitASecondHandshake()
+    {
+        var transport = new FakeJsonRpcTransport();
+        await using var client = new CodexRpcClient(transport);
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
+        Assert.Equal(2, transport.WrittenLines.Count);
+
+        await client.InitializeAsync(timeout.Token).WaitAsync(TestTimeout);
+
+        Assert.Equal(2, transport.WrittenLines.Count);
+    }
+
+    [Fact]
     public async Task CorrelatesConcurrentRequestsWhoseResponsesArriveInReverseOrder()
     {
         var transport = new FakeJsonRpcTransport();
         await using var client = new CodexRpcClient(transport);
         using var timeout = new CancellationTokenSource(TestTimeout);
 
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
+
         var first = client.CallAsync<JsonElement>("first/method", null, timeout.Token);
         var second = client.CallAsync<JsonElement>("second/method", null, timeout.Token);
 
-        await transport.WaitForWritesAsync(2, timeout.Token);
+        await transport.WaitForWritesAsync(4, timeout.Token);
 
-        Assert.Equal(1L, Parse(transport.WrittenLines[0]).GetProperty("id").GetInt64());
-        Assert.Equal(2L, Parse(transport.WrittenLines[1]).GetProperty("id").GetInt64());
+        // Writes: initialize request, initialized notification, first, second.
+        Assert.Equal(2L, Parse(transport.WrittenLines[2]).GetProperty("id").GetInt64());
+        Assert.Equal(3L, Parse(transport.WrittenLines[3]).GetProperty("id").GetInt64());
 
         // Responses arrive newest first.
-        transport.EnqueueLine("""{"id":2,"result":{"value":"second"}}""");
-        transport.EnqueueLine("""{"id":1,"result":{"value":"first"}}""");
+        transport.EnqueueLine("""{"id":3,"result":{"value":"second"}}""");
+        transport.EnqueueLine("""{"id":2,"result":{"value":"first"}}""");
 
         var firstResult = await first;
         var secondResult = await second;
@@ -138,13 +197,76 @@ public class CodexRpcClientTests
         await using var client = new CodexRpcClient(transport);
         using var timeout = new CancellationTokenSource(TestTimeout);
 
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
+
         var pending = client.CallAsync<JsonElement>("account/read", null, timeout.Token);
-        await transport.WaitForWritesAsync(1, timeout.Token);
+        await transport.WaitForWritesAsync(3, timeout.Token);
 
         transport.EnqueueLine("not json at all");
 
         var exception = await Assert.ThrowsAnyAsync<Exception>(async () => await pending);
         Assert.IsAssignableFrom<JsonException>(exception);
+    }
+
+    [Fact]
+    public async Task CallAsyncFailsImmediatelyAfterMalformedJsonFaultsTheClient()
+    {
+        var transport = new FakeJsonRpcTransport();
+        await using var client = new CodexRpcClient(transport);
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
+
+        transport.EnqueueLine("not json at all");
+
+        // Wait until the read loop has observed the malformed line and faulted the connection.
+        await Assert.ThrowsAnyAsync<JsonException>(async () =>
+        {
+            await foreach (var notification in client.Notifications(timeout.Token))
+            {
+            }
+        });
+
+        // CancellationToken.None on purpose: the terminal state alone must fail this call.
+        await Assert.ThrowsAnyAsync<JsonException>(
+            () => client.CallAsync<JsonElement>("account/read", null, CancellationToken.None).WaitAsync(TestTimeout));
+    }
+
+    [Fact]
+    public async Task DisposingTheClientFailsPendingRequestsInsteadOfLeavingThemHanging()
+    {
+        var transport = new FakeJsonRpcTransport();
+        var client = new CodexRpcClient(transport);
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
+
+        // CancellationToken.None on purpose: only the client's own disposal can end this call.
+        var pending = client.CallAsync<JsonElement>("account/read", null, CancellationToken.None);
+        await transport.WaitForWritesAsync(3, timeout.Token);
+
+        await client.DisposeAsync();
+
+        // WaitAsync bounds the RED state: before the fix this call hangs, and the assertion fails
+        // with a TimeoutException instead of hanging the whole test run.
+        await Assert.ThrowsAnyAsync<ObjectDisposedException>(() => pending.WaitAsync(TestTimeout));
+    }
+
+    /// <summary>
+    /// Completes the documented handshake (initialize request, initialize response, initialized
+    /// notification) so that ordinary RPC methods are allowed.
+    /// </summary>
+    private static async Task CompleteHandshakeAsync(
+        CodexRpcClient client,
+        FakeJsonRpcTransport transport,
+        CancellationToken cancellationToken)
+    {
+        var initialize = client.InitializeAsync(cancellationToken);
+
+        await transport.WaitForWritesAsync(1, cancellationToken);
+        transport.EnqueueLine("""{"id":1,"result":{}}""");
+
+        await initialize;
     }
 
     private static JsonElement Parse(string json)

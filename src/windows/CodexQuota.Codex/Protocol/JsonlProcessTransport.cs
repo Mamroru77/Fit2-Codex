@@ -9,11 +9,13 @@ namespace CodexQuota.Codex.Protocol;
 /// never blocked by a slow consumer.
 /// </summary>
 /// <remarks>
-/// The reader loop ends when the child's stdout reaches end of stream, so callers must terminate
-/// the process (or close the streams) before disposing this transport.
+/// The reader loop ends at end of stream, and also immediately when this transport is disposed:
+/// disposal aborts a read that is blocked waiting for input rather than waiting for the child to
+/// close stdout. Callers therefore never have to terminate the process first in order to dispose.
 /// </remarks>
 public sealed class JsonlProcessTransport : IJsonRpcTransport
 {
+    private readonly Stream _standardOutput;
     private readonly StreamWriter _writer;
     private readonly StreamReader _reader;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -24,6 +26,8 @@ public sealed class JsonlProcessTransport : IJsonRpcTransport
     {
         ArgumentNullException.ThrowIfNull(standardInput);
         ArgumentNullException.ThrowIfNull(standardOutput);
+
+        _standardOutput = standardOutput;
 
         _writer = new StreamWriter(standardInput, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
         {
@@ -72,9 +76,10 @@ public sealed class JsonlProcessTransport : IJsonRpcTransport
                 await _lines.Writer.WriteAsync(line).ConfigureAwait(false);
             }
         }
-        catch (IOException)
+        catch (Exception exception) when (exception is IOException or ObjectDisposedException or InvalidOperationException)
         {
-            // The child's stdout was closed underneath the reader; treat it as end of stream.
+            // The child's stdout was closed, or this transport was disposed underneath the reader:
+            // either way no further line can arrive, so the loop ends instead of hanging.
         }
         finally
         {
@@ -84,9 +89,13 @@ public sealed class JsonlProcessTransport : IJsonRpcTransport
 
     public async ValueTask DisposeAsync()
     {
-        _lines.Writer.TryComplete();
+        // Disposing the stdout stream first is what makes shutdown deterministic: it aborts a
+        // ReadLineAsync that is blocked waiting for input, so the reader loop can never outlive
+        // disposal even while the child process is alive and silent.
+        await _standardOutput.DisposeAsync().ConfigureAwait(false);
 
         await _readerLoop.ConfigureAwait(false);
+        _lines.Writer.TryComplete();
 
         await _writer.DisposeAsync().ConfigureAwait(false);
         _reader.Dispose();
