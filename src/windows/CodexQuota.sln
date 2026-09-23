@@ -11,6 +11,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexQuota.Codex", "CodexQu
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexQuota.Codex.Tests", "..\..\tests\windows\CodexQuota.Codex.Tests\CodexQuota.Codex.Tests.csproj", "{30A663AC-D346-497F-B832-B23FA2CC15D2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexQuota.Storage", "CodexQuota.Storage\CodexQuota.Storage.csproj", "{0BE8BF78-4FCE-47FF-8EE9-D6BC7D718E96}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexQuota.Storage.Tests", "..\..\tests\windows\CodexQuota.Storage.Tests\CodexQuota.Storage.Tests.csproj", "{3CBD8EB3-BBD8-4E3C-B91D-BD5395408941}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -36,5 +40,13 @@ Global
 		{30A663AC-D346-497F-B832-B23FA2CC15D2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{30A663AC-D346-497F-B832-B23FA2CC15D2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{30A663AC-D346-497F-B832-B23FA2CC15D2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0BE8BF78-4FCE-47FF-8EE9-D6BC7D718E96}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0BE8BF78-4FCE-47FF-8EE9-D6BC7D718E96}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0BE8BF78-4FCE-47FF-8EE9-D6BC7D718E96}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0BE8BF78-4FCE-47FF-8EE9-D6BC7D718E96}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3CBD8EB3-BBD8-4E3C-B91D-BD5395408941}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3CBD8EB3-BBD8-4E3C-B91D-BD5395408941}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3CBD8EB3-BBD8-4E3C-B91D-BD5395408941}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3CBD8EB3-BBD8-4E3C-B91D-BD5395408941}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

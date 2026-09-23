@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned to the .NET 8 line of SQLite, matching this project's net8.0 target. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.31" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodexQuota.Core\CodexQuota.Core.csproj" />
+  </ItemGroup>
+
+</Project>
