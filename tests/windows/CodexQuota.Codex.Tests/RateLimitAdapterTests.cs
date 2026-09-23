@@ -177,4 +177,96 @@ public class RateLimitAdapterTests
         Assert.Equal(TimeSpan.Zero, snapshot.ShortWindow.ResetsAt.Offset);
         Assert.Equal(TimeSpan.Zero, snapshot.Weekly.ResetsAt.Offset);
     }
+
+    /// <summary>
+    /// <see cref="DateTimeOffset.FromUnixTimeSeconds"/> only accepts -62135596800..253402300799.
+    /// Anything outside must be reported as unsupported, never throw out of the adapter.
+    /// </summary>
+    [Theory]
+    [InlineData(1_790_000_000_000L)] // milliseconds instead of seconds
+    [InlineData(long.MaxValue)]
+    [InlineData(-70_000_000_000L)]
+    public void RejectsResetsAtOutsideTheSupportedUnixSecondsRange(long resetsAt)
+    {
+        var source = RateLimitTestData.ReadResult(
+            RateLimitTestData.Bucket("short", 25, 300, resetsAt),
+            RateLimitTestData.Bucket("weekly", 40, 10080, 1_800_100_000));
+
+        Assert.IsType<RateLimitAdaptResult.Unsupported>(
+            new RateLimitAdapter().TryAdapt(source, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void RejectsNaNUsedPercent()
+    {
+        var source = RateLimitTestData.ReadResult(
+            RateLimitTestData.Bucket("short", double.NaN, 300, 1_800_000_000),
+            RateLimitTestData.Bucket("weekly", 40, 10080, 1_800_100_000));
+
+        Assert.IsType<RateLimitAdaptResult.Unsupported>(
+            new RateLimitAdapter().TryAdapt(source, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void RejectsInfiniteUsedPercent()
+    {
+        var source = RateLimitTestData.ReadResult(
+            RateLimitTestData.Bucket("short", double.PositiveInfinity, 300, 1_800_000_000),
+            RateLimitTestData.Bucket("weekly", 40, 10080, 1_800_100_000));
+
+        Assert.IsType<RateLimitAdaptResult.Unsupported>(
+            new RateLimitAdapter().TryAdapt(source, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void RejectsNegativeUsedPercent()
+    {
+        var source = RateLimitTestData.ReadResult(
+            RateLimitTestData.Bucket("short", -1d, 300, 1_800_000_000),
+            RateLimitTestData.Bucket("weekly", 40, 10080, 1_800_100_000));
+
+        Assert.IsType<RateLimitAdaptResult.Unsupported>(
+            new RateLimitAdapter().TryAdapt(source, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void IgnoresUnrelatedWindowDurations()
+    {
+        var source = RateLimitTestData.ReadResult(
+            RateLimitTestData.Bucket("short", 25, 300, 1_800_000_000),
+            RateLimitTestData.Bucket("weekly", 40, 10080, 1_800_100_000),
+            RateLimitTestData.Bucket("daily", 15, 1440, 1_800_050_000));
+
+        Assert.IsType<RateLimitAdaptResult.Success>(
+            new RateLimitAdapter().TryAdapt(source, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void TreatsEqualWeeklyBucketAppearingTwiceAsOneCandidate()
+    {
+        var source = RateLimitTestData.ReadResultWithByLimitId(
+            primary: RateLimitTestData.Bucket("weekly", 40, 10080, 1_800_100_000),
+            secondary: null,
+            byLimitId: new[]
+            {
+                RateLimitTestData.Bucket("weekly", 40, 10080, 1_800_100_000),
+                RateLimitTestData.Bucket("short", 25, 300, 1_800_000_000),
+            });
+
+        Assert.IsType<RateLimitAdaptResult.Success>(
+            new RateLimitAdapter().TryAdapt(source, DateTimeOffset.UnixEpoch));
+    }
+
+    [Fact]
+    public void UnsupportedResultCarriesAReason()
+    {
+        var source = RateLimitTestData.ReadResult(
+            RateLimitTestData.Bucket("short", 101, 300, 1_800_000_000),
+            RateLimitTestData.Bucket("weekly", 40, 10080, 1_800_100_000));
+
+        var unsupported = Assert.IsType<RateLimitAdaptResult.Unsupported>(
+            new RateLimitAdapter().TryAdapt(source, DateTimeOffset.UnixEpoch));
+
+        Assert.False(string.IsNullOrWhiteSpace(unsupported.Reason));
+    }
 }

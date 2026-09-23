@@ -15,6 +15,10 @@ public sealed class RateLimitAdapter
     private const int ShortWindowMinutes = 300;
     private const int WeeklyWindowMinutes = 10080;
 
+    // DateTimeOffset.FromUnixTimeSeconds accepts only this interval and throws outside it.
+    private const long MinUnixSeconds = -62_135_596_800;
+    private const long MaxUnixSeconds = 253_402_300_799;
+
     public RateLimitAdaptResult TryAdapt(RateLimitsReadResult source, DateTimeOffset receivedAt)
     {
         var candidates = Flatten(source);
@@ -114,6 +118,13 @@ public sealed class RateLimitAdapter
         if (bucket.ResetsAt is not { } resetsAt)
         {
             return (null, $"The {windowMinutes}-minute window is missing resetsAt.");
+        }
+
+        // Malformed source data must be reported as unsupported; it must never escape as an
+        // exception from a method whose contract is "always return a result".
+        if (resetsAt < MinUnixSeconds || resetsAt > MaxUnixSeconds)
+        {
+            return (null, $"The {windowMinutes}-minute window reports resetsAt {resetsAt}, outside the supported Unix seconds range.");
         }
 
         var window = new QuotaWindow(
