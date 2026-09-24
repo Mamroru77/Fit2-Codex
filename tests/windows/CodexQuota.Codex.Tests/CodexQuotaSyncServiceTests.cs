@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using CodexQuota.Codex.Account;
 using CodexQuota.Codex.Protocol;
@@ -231,6 +232,181 @@ public class CodexQuotaSyncServiceTests
         Assert.Equal(1L, harness.Store.Sequence);
         Assert.Equal(75d, harness.Store.Current!.ShortWindow.RemainingPercent);
     }
+
+    [Fact]
+    public async Task InitialAuthenticatedQuotaReadFailureDoesNotRemainStuckInSyncing()
+    {
+        await using var harness = new SyncHarness();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        await FailInitialQuotaReadAsync(harness, timeout.Token);
+
+        // The first quota read failed, but the connection is healthy and the Bridge is running:
+        // phase and source availability are separate concerns, so the service settles in Ready
+        // while reporting the source as errored.
+        Assert.Equal(BridgeRuntimePhase.Ready, harness.Runtime.Current.Phase);
+        Assert.Equal(QuotaSourceStatus.SourceError, harness.Runtime.Current.SourceStatus);
+
+        // The watchdog is the reconciliation path for a transient quota-read failure, so it must
+        // run even though the first read failed.
+        Assert.True(harness.Service.IsWatchdogRunning);
+
+        Assert.Null(harness.Runtime.Current.LastSuccessfulSyncAt);
+        Assert.Null(harness.Store.Current);
+        Assert.Equal(0L, harness.Store.Sequence);
+    }
+
+    [Fact]
+    public async Task SuccessfulReadAfterInitialFailureRestoresOnlineStatus()
+    {
+        await using var harness = new SyncHarness();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        await FailInitialQuotaReadAsync(harness, timeout.Token);
+        Assert.True(harness.Service.IsWatchdogRunning);
+
+        // The watchdog tick performs exactly this reconciliation read, so driving it through
+        // RefreshNowAsync exercises the recovery path without waiting five real minutes.
+        var refresh = harness.Service.RefreshNowAsync(timeout.Token);
+
+        await harness.Transport.WaitForWritesAsync(5, timeout.Token);
+        Assert.Equal("account/rateLimits/read", harness.MethodOf(4));
+        harness.Transport.EnqueueLine($$"""{"id":4,"result":{{ValidRateLimits}}}""");
+
+        await refresh;
+
+        Assert.Equal(QuotaSourceStatus.Online, harness.Runtime.Current.SourceStatus);
+        Assert.NotNull(harness.Runtime.Current.LastSuccessfulSyncAt);
+        Assert.Equal(1L, harness.Store.Sequence);
+        Assert.Equal(75d, harness.Store.Current!.ShortWindow.RemainingPercent);
+    }
+
+    [Fact]
+    public async Task NotificationHandlerFailureDoesNotKillWorker()
+    {
+        await using var harness = new SyncHarness();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+        await StartAuthenticatedAsync(harness, timeout.Token);
+
+        // A successful login completion makes the handler read the account; that single read is
+        // rejected, so handling this notification fails while the connection stays healthy.
+        harness.Transport.EnqueueLine("""{"method":"account/login/completed","params":{"success":true}}""");
+
+        await harness.Transport.WaitForWritesAsync(5, timeout.Token);
+        Assert.Equal("account/read", harness.MethodOf(4));
+        harness.Transport.EnqueueLine("""{"id":4,"error":{"code":-32603,"message":"account unavailable"}}""");
+
+        await harness.WaitForSourceStatusAsync(QuotaSourceStatus.SourceError, timeout.Token);
+
+        // The worker must survive: a later valid notification is still processed.
+        harness.Transport.EnqueueLine(RateLimitsUpdated(10, 20));
+        await harness.Store.WaitForReplacementsAsync(2, timeout.Token);
+
+        Assert.Equal(2L, harness.Store.Sequence);
+        Assert.Equal(90d, harness.Store.Current!.ShortWindow.RemainingPercent);
+    }
+
+    [Fact]
+    public async Task RuntimeObserverExceptionDoesNotKillNotificationWorker()
+    {
+        await using var harness = new SyncHarness();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+        await StartAuthenticatedAsync(harness, timeout.Token);
+
+        // An observer that throws must not be able to destroy the notification worker, because the
+        // worker reports source errors through that very same event.
+        Action<BridgeRuntimeSnapshot> hostile = _ => throw new InvalidOperationException("observer failure");
+        harness.Runtime.Changed += hostile;
+
+        try
+        {
+            harness.Transport.EnqueueLine(RateLimitsUpdated(10, 20));
+            await harness.Store.WaitForReplacementsAsync(2, timeout.Token);
+
+            harness.Transport.EnqueueLine(RateLimitsUpdated(30, 40));
+            await harness.Store.WaitForReplacementsAsync(3, timeout.Token);
+        }
+        finally
+        {
+            // The hostile observer belongs to this test alone; detach it before teardown. What it
+            // must not have done is kill the worker, which the assertions below check.
+            harness.Runtime.Changed -= hostile;
+        }
+
+        Assert.Equal(3L, harness.Store.Sequence);
+        Assert.Equal(70d, harness.Store.Current!.ShortWindow.RemainingPercent);
+    }
+
+    [Fact]
+    public async Task PumpTransportFaultMarksSourceError()
+    {
+        await using var harness = new SyncHarness();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+        await StartAuthenticatedAsync(harness, timeout.Token);
+
+        // The App Server stream ends: the RPC client is terminal from here on.
+        harness.Transport.CompleteInbound();
+
+        await harness.WaitForSourceStatusAsync(QuotaSourceStatus.SourceError, timeout.Token);
+
+        Assert.Equal(QuotaSourceStatus.SourceError, harness.Runtime.Current.SourceStatus);
+
+        // The service is session-bound: it reports the error and keeps running, but it must not
+        // claim this terminal client recovers by itself. Replacing it is the host's job.
+        Assert.Equal(BridgeRuntimePhase.Ready, harness.Runtime.Current.Phase);
+    }
+
+    [Fact]
+    public async Task CancelledInitialQuotaReadPropagatesCancellation()
+    {
+        await using var harness = new SyncHarness();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        var start = harness.Service.StartAsync(timeout.Token);
+
+        await harness.Transport.WaitForWritesAsync(1, timeout.Token);
+        harness.Transport.EnqueueLine("""{"id":1,"result":{}}""");
+
+        await harness.Transport.WaitForWritesAsync(3, timeout.Token);
+        harness.Transport.EnqueueLine("""{"id":2,"result":{"authMode":"chatgpt"}}""");
+
+        await harness.Transport.WaitForWritesAsync(4, timeout.Token);
+
+        // Caller cancellation is not a source error: it must surface as cancellation.
+        timeout.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start);
+    }
+
+    /// <summary>
+    /// Starts the service against an authenticated account whose very first
+    /// <c>account/rateLimits/read</c> is rejected by the App Server. Only that one request fails;
+    /// the connection stays healthy.
+    /// </summary>
+    private static async Task FailInitialQuotaReadAsync(SyncHarness harness, CancellationToken cancellationToken)
+    {
+        var start = harness.Service.StartAsync(cancellationToken);
+
+        await harness.Transport.WaitForWritesAsync(1, cancellationToken);
+        harness.Transport.EnqueueLine("""{"id":1,"result":{}}""");
+
+        await harness.Transport.WaitForWritesAsync(3, cancellationToken);
+        harness.Transport.EnqueueLine("""{"id":2,"result":{"authMode":"chatgpt","email":"dev@example.com"}}""");
+
+        await harness.Transport.WaitForWritesAsync(4, cancellationToken);
+        Assert.Equal("account/rateLimits/read", harness.MethodOf(3));
+        harness.Transport.EnqueueLine(
+            """{"id":3,"error":{"code":-32603,"message":"rate limits are unavailable"}}""");
+
+        await start;
+    }
+
+    /// <summary>One <c>account/rateLimits/updated</c> notification reporting the given usage.</summary>
+    private static string RateLimitsUpdated(int shortUsedPercent, int weeklyUsedPercent)
+        => """
+        {"method":"account/rateLimits/updated","params":{"primary":{"limitId":"codex","usedPercent":SHORT,"windowDurationMins":300,"resetsAt":1790000000},"secondary":{"limitId":"codex_weekly","usedPercent":WEEKLY,"windowDurationMins":10080,"resetsAt":1790500000}}}
+        """.Replace("SHORT", shortUsedPercent.ToString(CultureInfo.InvariantCulture))
+           .Replace("WEEKLY", weeklyUsedPercent.ToString(CultureInfo.InvariantCulture));
 
     private static Task StartAuthenticatedAsync(SyncHarness harness, CancellationToken cancellationToken)
         => StartAsync(harness, """{"authMode":"chatgpt","email":"dev@example.com"}""", cancellationToken);

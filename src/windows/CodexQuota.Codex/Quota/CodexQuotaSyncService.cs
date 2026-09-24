@@ -14,7 +14,17 @@ namespace CodexQuota.Codex.Quota;
 /// </summary>
 /// <remarks>
 /// Server notifications are queued onto an internal channel and handled by a separate worker, so
-/// the handler's async work can never stall the App Server stdout reader.
+/// the handler's async work can never stall the App Server stdout reader. Handling is isolated per
+/// notification: one bad notification, or one observer that throws while the runtime state
+/// changes, must never end that worker.
+/// </remarks>
+/// <remarks>
+/// One instance is bound to one <see cref="CodexRpcClient"/>, and therefore to one Codex App
+/// Server session. A faulted client is permanently terminal, and an App Server restart produces a
+/// new client rather than repairing the old one, so this service never rebinds its client: when
+/// the host observes a replacement session it must dispose this service and construct and start a
+/// new one for the new client. A transport fault is therefore reported as a source error and never
+/// as something this instance recovers from by itself.
 /// </remarks>
 public sealed class CodexQuotaSyncService : IAsyncDisposable
 {
@@ -152,8 +162,10 @@ public sealed class CodexQuotaSyncService : IAsyncDisposable
         }
         catch (Exception)
         {
-            // A transport fault ends the notification stream; the watchdog and the next account
-            // update re-establish state rather than the Bridge tearing itself down.
+            // A transport fault ends the notification stream for good, because the RPC client is
+            // terminal once it has faulted. Report the source as errored and leave the recovery to
+            // the host, which replaces this session-bound service with one for the next session.
+            MarkSourceErrorBestEffort();
         }
         finally
         {
@@ -167,7 +179,20 @@ public sealed class CodexQuotaSyncService : IAsyncDisposable
         {
             await foreach (var notification in _inbox.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
             {
-                await HandleNotificationAsync(notification, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await HandleNotificationAsync(notification, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    // One bad notification, or one observer that threw while the runtime state
+                    // changed, must never cost the processing of the notifications that follow.
+                    MarkSourceErrorBestEffort();
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -245,10 +270,65 @@ public sealed class CodexQuotaSyncService : IAsyncDisposable
 
         _runtime.SetPhase(BridgeRuntimePhase.Syncing);
 
-        await ReadRateLimitsAsync(cancellationToken).ConfigureAwait(false);
+        var synchronized = await TrySynchronizeQuotaAsync(cancellationToken).ConfigureAwait(false);
 
+        // The watchdog is the reconciliation path for a transient quota-read failure, so it starts
+        // either way: without it a single failed read would leave this service unable to ever read
+        // quota again, because a repeated account update carries no new quota information.
         StartWatchdog();
-        _runtime.SetPhase(BridgeRuntimePhase.Ready);
+
+        // Phase and source availability are separate concerns. A failed first read still leaves a
+        // running Bridge holding the last trusted snapshot, so the service settles in Ready and
+        // reports the source as errored instead of staying in Syncing forever.
+        if (synchronized)
+        {
+            _runtime.SetPhase(BridgeRuntimePhase.Ready);
+        }
+        else
+        {
+            _runtime.SetPhase(BridgeRuntimePhase.Ready, QuotaSourceStatus.SourceError);
+        }
+    }
+
+    /// <summary>
+    /// Performs one quota read and reports whether it succeeded. A transient source or RPC failure
+    /// is reported instead of propagated: propagating it would strand the caller in
+    /// <see cref="BridgeRuntimePhase.Syncing"/> with no watchdog, no recorded error and no way back.
+    /// Cancellation requested by the caller still propagates unchanged, because that is not a
+    /// source error.
+    /// </summary>
+    private async Task<bool> TrySynchronizeQuotaAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await ReadRateLimitsAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort source-error report. <see cref="BridgeRuntimeState.SetSourceStatus"/> raises
+    /// <see cref="BridgeRuntimeState.Changed"/>, so an observer that throws must not be able to
+    /// kill the worker that is reporting the error; the report is isolated here for that reason.
+    /// </summary>
+    private void MarkSourceErrorBestEffort()
+    {
+        try
+        {
+            _runtime.SetSourceStatus(QuotaSourceStatus.SourceError);
+        }
+        catch (Exception)
+        {
+            // Losing the error report must never cost the worker that produced it.
+        }
     }
 
     private async Task ReadRateLimitsAsync(CancellationToken cancellationToken)
