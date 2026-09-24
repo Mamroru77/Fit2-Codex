@@ -69,9 +69,18 @@ public static class PairingEndpoints
     /// </summary>
     private static IResult HandleRequest(PairingRequest request, PairingService pairing)
     {
-        var session = pairing.CreateSession(PairingOrigin.Discovery, request?.DisplayName, DateTimeOffset.UtcNow);
+        try
+        {
+            var session = pairing.CreateSession(PairingOrigin.Discovery, request?.DisplayName, DateTimeOffset.UtcNow);
 
-        return Results.Ok(ToResponse(session));
+            return Results.Ok(ToResponse(session));
+        }
+        catch (InvalidOperationException)
+        {
+            // The Bridge is shutting down. Answering with the normal pairing error keeps a client from
+            // treating a deliberate shutdown as a bug it should retry through.
+            return ApiResults.InvalidPairing();
+        }
     }
 
     /// <summary>Attaches a phone to a QR session the desktop created.</summary>

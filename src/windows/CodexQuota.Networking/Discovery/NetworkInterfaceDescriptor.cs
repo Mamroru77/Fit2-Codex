@@ -76,8 +76,9 @@ public static class BridgeDiagnostics
     public static BridgeDiagnostic NoEligibleLanInterface()
         => new(
             BridgeDiagnosticCodes.NoEligibleLanInterface,
-            "No eligible private LAN interface was found. Connect this PC to a network whose Windows "
-            + "profile is Private, then choose the interface in Settings.");
+            "The Bridge is not listening on the LAN because no interface has been chosen. Open "
+            + "Settings, choose the Ethernet or Wi-Fi adapter this PC uses on your home network, and "
+            + "the Bridge will listen there. VPN, virtual, public and loopback adapters are refused.");
 
     /// <summary>The chosen interface is not eligible under the exposure policy.</summary>
     public static BridgeDiagnostic PreferredInterfaceNotEligible(NetworkInterfaceDescriptor descriptor)

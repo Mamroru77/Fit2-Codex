@@ -32,6 +32,8 @@ public sealed class PairingService
     private readonly Dictionary<string, PairingSession> _sessions = new(StringComparer.Ordinal);
     private readonly object _gate = new();
 
+    private bool _openForNewSessions = true;
+
     public PairingService(DeviceTokenService tokens)
     {
         ArgumentNullException.ThrowIfNull(tokens);
@@ -39,9 +41,38 @@ public sealed class PairingService
     }
 
     /// <summary>
+    /// Whether new pairing sessions may still be created. It is set to <c>false</c> as the first step
+    /// of an orderly shutdown, so a phone cannot start a pairing that the Bridge is about to stop
+    /// serving.
+    /// </summary>
+    public bool IsOpenForNewSessions
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _openForNewSessions;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Stops accepting new pairing sessions. Sessions already in flight keep their state so a user
+    /// who is mid-pairing sees an accurate answer rather than a session that vanished.
+    /// </summary>
+    public void CloseForNewSessions()
+    {
+        lock (_gate)
+        {
+            _openForNewSessions = false;
+        }
+    }
+
+    /// <summary>
     /// Starts a pairing session. A QR session waits for the phone; a discovery request already has
     /// a phone waiting and so goes straight to local approval.
     /// </summary>
+    /// <exception cref="InvalidOperationException">The Bridge is shutting down.</exception>
     public PairingSession CreateSession(PairingOrigin origin, string? requestedDisplayName, DateTimeOffset now)
     {
         var session = new PairingSession(
@@ -55,6 +86,11 @@ public sealed class PairingService
 
         lock (_gate)
         {
+            if (!_openForNewSessions)
+            {
+                throw new InvalidOperationException("The Bridge is shutting down and is no longer pairing.");
+            }
+
             _sessions[session.PairingId] = session;
         }
 

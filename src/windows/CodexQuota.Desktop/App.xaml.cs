@@ -33,6 +33,9 @@ namespace CodexQuota.Desktop;
 /// </summary>
 public partial class App : System.Windows.Application
 {
+    /// <summary>Application version, reported through <c>/info</c> and the WebSocket hello frame.</summary>
+    private const string BridgeVersion = "1.0.0";
+
     private IHost? _host;
     private TrayController? _tray;
     private StatusWindow? _window;
@@ -40,18 +43,9 @@ public partial class App : System.Windows.Application
     private PairingViewModel? _pairingViewModel;
     private BridgeDatabase? _database;
     private BridgeIdentity? _bridgeIdentity;
+    private PairedDeviceRepository? _pairedDevices;
     private string? _logsDirectory;
     private bool _exiting;
-
-    /// <summary>
-    /// The LAN endpoint the phone should connect to, once the API host is listening. It is
-    /// <c>null</c> until then, which is a real state: without an eligible interface there is no
-    /// address to put in a QR code.
-    /// </summary>
-    private BridgeEndpointAddress? _endpoint;
-
-    /// <summary>Where a paired phone should connect. Set when the API host has started.</summary>
-    internal sealed record BridgeEndpointAddress(string Host, int Port);
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -92,16 +86,21 @@ public partial class App : System.Windows.Application
             Path.Combine(bridgeFolder, "identity")).GetOrCreateAsync(CancellationToken.None);
 
         var pairedDevices = new PairedDeviceRepository(_database);
+        _pairedDevices = pairedDevices;
         var deviceTokens = new DeviceTokenService(pairedDevices);
         var pairingService = new PairingService(deviceTokens);
+
+        // Built by the host after Build, so the pairing QR reads it through this captured variable
+        // rather than through a field that would have to be kept in step.
+        LanApiHostedService? lanHost = null;
 
         _pairingViewModel = new PairingViewModel(
             pairingService,
             _bridgeIdentity,
-            () => _endpoint is { } endpoint
+            () => lanHost is { EndpointHost: { } host, EndpointPort: > 0 } lan
                 ? PairingQrPayload.Create(
-                    endpoint.Host,
-                    endpoint.Port,
+                    host,
+                    lan.EndpointPort,
                     pairingId: string.Empty,
                     _bridgeIdentity.BridgeId,
                     _bridgeIdentity.SpkiSha256)
@@ -121,7 +120,28 @@ public partial class App : System.Windows.Application
                 runtime,
                 worker,
                 onStderrLine: line => logger.LogWarning("Codex app-server: {Line}", line),
-                onDiagnostic: message => logger.LogError("{Message}", message));
+                onDiagnostic: message => logger.LogError("{Message}", message),
+                // Every published snapshot is streamed to paired phones. A slow client is dropped by
+                // the hub rather than allowed to slow the publication down.
+                onPublished: update => lanHost?.Hub?.BroadcastQuotaUpdatedAsync(update));
+        });
+
+        // Registered after the Codex host, so the LAN API only comes up once quota state exists.
+        builder.Services.AddSingleton<IHostedService>(services =>
+        {
+            var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger<LanApiHostedService>();
+
+            lanHost = new LanApiHostedService(
+                _bridgeIdentity!,
+                pairingService,
+                deviceTokens,
+                pairedDevices,
+                repository,
+                store,
+                BridgeVersion,
+                logger);
+
+            return lanHost;
         });
 
         _host = builder.Build();
@@ -136,6 +156,7 @@ public partial class App : System.Windows.Application
             },
             refreshNow: () => _ = SafeAsync(() => RefreshNowAsync()),
             pairDevice: () => _pairingWindow.BeginPairing(),
+            revokeDevices: () => _ = SafeAsync(RevokeDevicesAsync),
             login: () => _ = SafeAsync(LoginAsync),
             logout: () => _ = SafeAsync(() => LogoutAsync()),
             openLogs: OpenLogs,
@@ -207,6 +228,51 @@ public partial class App : System.Windows.Application
         return host?.Account is { } account
             ? account.LogoutAsync(CancellationToken.None)
             : Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Revokes every paired device. Their credentials stop working immediately, on REST and on the
+    /// WebSocket alike, and re-pairing requires the same local approval as the first time.
+    /// </summary>
+    private async Task RevokeDevicesAsync()
+    {
+        if (_pairedDevices is null)
+        {
+            return;
+        }
+
+        var devices = await _pairedDevices.ListAsync(CancellationToken.None);
+        var active = devices.Where(device => device.RevokedAt is null).ToArray();
+
+        if (active.Length == 0)
+        {
+            System.Windows.MessageBox.Show(
+                "No paired devices to revoke.",
+                "Codex Quota Bridge",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            return;
+        }
+
+        var confirmed = System.Windows.MessageBox.Show(
+            $"Revoke {active.Length} paired device(s)?\n\nThey will need to pair again, which requires "
+            + "approval on this PC.",
+            "Codex Quota Bridge",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning);
+
+        if (confirmed != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+
+        foreach (var device in active)
+        {
+            await _pairedDevices.RevokeAsync(device.DeviceId, now, CancellationToken.None);
+        }
     }
 
     private async Task ExitAsync()

@@ -51,6 +51,10 @@ public sealed class BridgeHostedService : IHostedService, IAsyncDisposable
     /// Sink for lifecycle conditions the Bridge cannot fix by itself, such as a child that survived
     /// termination.
     /// </param>
+    /// <param name="onPublished">
+    /// Called with every published quota update, after it has been stored and offered to persistence.
+    /// The WebSocket hub uses it to stream updates; a throw from it is absorbed.
+    /// </param>
     public BridgeHostedService(
         CodexRuntime runtime,
         string codexHomePath,
@@ -59,7 +63,8 @@ public sealed class BridgeHostedService : IHostedService, IAsyncDisposable
         HistoryPersistenceWorker history,
         RestartBackoff? backoff = null,
         Action<string>? onStderrLine = null,
-        Action<string>? onDiagnostic = null)
+        Action<string>? onDiagnostic = null,
+        Action<QuotaStateUpdate>? onPublished = null)
         : this(
             _ => Task.FromResult<ICodexProcess>(
                 CodexAppServerProcess.Start(runtime, codexHomePath, onStderrLine, onDiagnostic)),
@@ -67,7 +72,8 @@ public sealed class BridgeHostedService : IHostedService, IAsyncDisposable
             runtimeState,
             history,
             backoff,
-            null)
+            null,
+            onPublished)
     {
     }
 
@@ -78,7 +84,8 @@ public sealed class BridgeHostedService : IHostedService, IAsyncDisposable
         BridgeRuntimeState runtime,
         HistoryPersistenceWorker history,
         RestartBackoff? backoff = null,
-        ICodexTimeSource? timeSource = null)
+        ICodexTimeSource? timeSource = null,
+        Action<QuotaStateUpdate>? onPublished = null)
     {
         ArgumentNullException.ThrowIfNull(launchProcess);
         ArgumentNullException.ThrowIfNull(store);
@@ -91,9 +98,9 @@ public sealed class BridgeHostedService : IHostedService, IAsyncDisposable
         _backoff = backoff ?? new RestartBackoff();
         _timeSource = timeSource ?? new SystemTimeSource();
 
-        // Every published snapshot is offered to persistence, and a snapshot is only ever
-        // published by replacing it in the store.
-        _store = new PublishingQuotaStateStore(store, history);
+        // Every published snapshot is offered to persistence and to any other downstream consumer,
+        // and a snapshot is only ever published by replacing it in the store.
+        _store = new PublishingQuotaStateStore(store, history, onPublished);
     }
 
     /// <summary>Lifecycle status of the managed App Server child process.</summary>
@@ -242,18 +249,23 @@ public sealed class BridgeHostedService : IHostedService, IAsyncDisposable
     }
 
     /// <summary>
-    /// Publishes into the real store and offers the resulting update to persistence. Persistence
-    /// is downstream only: it can never hold up or roll back a publication.
+    /// Publishes into the real store and offers the resulting update to persistence and to any other
+    /// downstream consumer. Both are downstream only: neither can hold up or roll back a publication.
     /// </summary>
     private sealed class PublishingQuotaStateStore : IQuotaStateStore
     {
         private readonly IQuotaStateStore _inner;
         private readonly HistoryPersistenceWorker _history;
+        private readonly Action<QuotaStateUpdate>? _onPublished;
 
-        internal PublishingQuotaStateStore(IQuotaStateStore inner, HistoryPersistenceWorker history)
+        internal PublishingQuotaStateStore(
+            IQuotaStateStore inner,
+            HistoryPersistenceWorker history,
+            Action<QuotaStateUpdate>? onPublished)
         {
             _inner = inner;
             _history = history;
+            _onPublished = onPublished;
         }
 
         public QuotaSnapshot? Current => _inner.Current;
@@ -266,6 +278,16 @@ public sealed class BridgeHostedService : IHostedService, IAsyncDisposable
 
             // A full backlog just means fewer history points; the store stays authoritative.
             _history.TryEnqueue(update);
+
+            try
+            {
+                _onPublished?.Invoke(update);
+            }
+            catch (Exception)
+            {
+                // A downstream consumer that throws must never cost the publication that already
+                // happened, nor the callers waiting on it.
+            }
 
             return update;
         }

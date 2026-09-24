@@ -26,6 +26,7 @@
     <ProjectReference Include="..\..\..\src\windows\CodexQuota.Core\CodexQuota.Core.csproj" />
     <ProjectReference Include="..\..\..\src\windows\CodexQuota.Codex\CodexQuota.Codex.csproj" />
     <ProjectReference Include="..\..\..\src\windows\CodexQuota.Storage\CodexQuota.Storage.csproj" />
+    <ProjectReference Include="..\..\..\src\windows\CodexQuota.Networking\CodexQuota.Networking.csproj" />
     <ProjectReference Include="..\..\..\src\windows\CodexQuota.Desktop\CodexQuota.Desktop.csproj" />
   </ItemGroup>
 

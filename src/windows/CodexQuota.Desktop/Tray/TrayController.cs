@@ -19,6 +19,7 @@ public sealed class TrayController : IDisposable
         Action openStatus,
         Action refreshNow,
         Action pairDevice,
+        Action revokeDevices,
         Action login,
         Action logout,
         Action openLogs,
@@ -27,6 +28,7 @@ public sealed class TrayController : IDisposable
         ArgumentNullException.ThrowIfNull(openStatus);
         ArgumentNullException.ThrowIfNull(refreshNow);
         ArgumentNullException.ThrowIfNull(pairDevice);
+        ArgumentNullException.ThrowIfNull(revokeDevices);
         ArgumentNullException.ThrowIfNull(login);
         ArgumentNullException.ThrowIfNull(logout);
         ArgumentNullException.ThrowIfNull(openLogs);
@@ -38,6 +40,7 @@ public sealed class TrayController : IDisposable
         menu.Items.Add(CreateItem("Refresh Now", refreshNow));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(CreateItem("Pair Device", pairDevice));
+        menu.Items.Add(CreateItem("Revoke Paired Devices", revokeDevices));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(CreateItem("Login", login));
         menu.Items.Add(CreateItem("Logout", logout));
