@@ -45,15 +45,19 @@ object TestPki {
     private var serial: Long = 1
 
     /** Creates an identity authority. */
-    fun newAuthority(commonName: String): Authority {
+    fun newAuthority(
+        commonName: String,
+        notBefore: Date = defaultNotBefore(),
+        notAfter: Date = defaultNotAfter(TEN_YEARS_DAYS),
+    ): Authority {
         val keyPair = newKeyPair()
         val name = X500Name("CN=$commonName")
 
         val builder = JcaX509v3CertificateBuilder(
             name,
             nextSerial(),
-            Date(System.currentTimeMillis() - DAY_MILLIS),
-            Date(System.currentTimeMillis() + 3650L * DAY_MILLIS),
+            notBefore,
+            notAfter,
             name,
             keyPair.public,
         )
@@ -69,25 +73,35 @@ object TestPki {
     }
 
     /** Signs a leaf for [host] with [authority]. */
-    fun leafFor(authority: Authority, host: String): Leaf {
+    fun leafFor(
+        authority: Authority,
+        host: String,
+        notBefore: Date = defaultNotBefore(),
+        notAfter: Date = defaultNotAfter(ONE_YEAR_DAYS),
+    ): Leaf {
         val keyPair = newKeyPair()
         val subject = X500Name("CN=$host")
 
         val builder = JcaX509v3CertificateBuilder(
             X500Name(authority.certificate.subjectX500Principal.name),
             nextSerial(),
-            Date(System.currentTimeMillis() - DAY_MILLIS),
-            Date(System.currentTimeMillis() + 365L * DAY_MILLIS),
+            notBefore,
+            notAfter,
             subject,
             keyPair.public,
         )
 
         builder.addExtension(Extension.basicConstraints, true, BasicConstraints(false))
-        builder.addExtension(
-            Extension.subjectAlternativeName,
-            false,
-            GeneralNames(GeneralName(GeneralName.dNSName, host)),
-        )
+
+        // The SAN has to match the kind of name the client dials: an IP address is matched against an
+        // iPAddress entry, not a dNSName one.
+        val san = if (isIpAddress(host)) {
+            GeneralName(GeneralName.iPAddress, host)
+        } else {
+            GeneralName(GeneralName.dNSName, host)
+        }
+
+        builder.addExtension(Extension.subjectAlternativeName, false, GeneralNames(san))
 
         val certificate = JcaX509CertificateConverter()
             .getCertificate(builder.build(JcaContentSignerBuilder(SIGNATURE).build(authority.keyPair.private)))
@@ -98,6 +112,25 @@ object TestPki {
     /** A leaf that claims [host] but was signed by an authority nobody pinned. */
     fun leafFromAnotherAuthority(host: String): Leaf = leafFor(newAuthority("impostor"), host)
 
+    /** A certificate that expired [daysAgo] days ago. */
+    fun expiredNotAfter(daysAgo: Long): Date = defaultNotAfter(-daysAgo)
+
+    /** A certificate that does not become valid until [daysAhead] days from now. */
+    fun futureNotBefore(daysAhead: Long): Date = defaultNotBefore(daysAhead)
+
+    /** A certificate that expired [daysAgo] days ago, valid from long before that. */
+    fun expiredNotBefore(daysAgo: Long): Date = defaultNotBefore(daysAgo + 30)
+
+    private fun defaultNotBefore(daysAhead: Long = 0): Date =
+        Date(System.currentTimeMillis() + daysAhead * DAY_MILLIS - DAY_MILLIS)
+
+    private fun defaultNotAfter(daysAhead: Long): Date =
+        Date(System.currentTimeMillis() + daysAhead * DAY_MILLIS)
+
+    /** Whether [host] is a literal address rather than a name. */
+    private fun isIpAddress(host: String): Boolean =
+        Regex("^\\d{1,3}(\\.\\d{1,3}){3}$").matches(host)
+
     private fun newKeyPair(): KeyPair =
         KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
 
@@ -105,4 +138,6 @@ object TestPki {
 
     private const val SIGNATURE = "SHA256withRSA"
     private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
+    private const val ONE_YEAR_DAYS = 365L
+    private const val TEN_YEARS_DAYS = 3650L
 }
