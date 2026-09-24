@@ -58,14 +58,16 @@ jobs:
 
       - name: Put the SDK command-line tools on PATH
         run: |
-          # The runner has the SDK, but sdkmanager is not on PATH. Resolve it rather than hard-coding
-          # a version directory, which changes with the runner image.
+          # The runner has the SDK, but sdkmanager is not on PATH. Resolve it rather than hard-coding a
+          # version directory, which changes with the runner image. sdkmanager lives at
+          # cmdline-tools/<version>/bin/sdkmanager, so the search has to go three levels deep.
           sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          sdkmanager_path="$(find "$sdk/cmdline-tools" -maxdepth 2 -name sdkmanager -type f | head -1)"
+          sdkmanager_path="$(find "$sdk" -maxdepth 5 -name sdkmanager 2>/dev/null | head -1)"
 
           if [ -z "$sdkmanager_path" ]; then
-            echo "::error::No sdkmanager under $sdk/cmdline-tools"
-            find "$sdk" -maxdepth 3 -name 'sdkmanager*' || true
+            echo "::error::No sdkmanager under $sdk"
+            ls -la "$sdk" || true
+            find "$sdk" -maxdepth 4 -name 'sdkmanager*' || true
             exit 1
           fi
 
