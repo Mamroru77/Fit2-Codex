@@ -210,6 +210,14 @@ jobs:
 
           avdmanager list avd
 
+      - name: Report what the emulator can do
+        run: |
+          # Facts before the attempt, so a failure below is diagnosable rather than mysterious.
+          "$ANDROID_HOME/emulator/emulator" -accel-check || true
+          avdmanager list avd || true
+          adb start-server
+          adb version
+
       - name: Boot the emulator
         run: |
           # `swiftshader_indirect` is software rendering, which is what a headless runner can do.
@@ -224,15 +232,42 @@ jobs:
             -accel on \
             > "$RUNNER_TEMP/emulator.log" 2>&1 &
 
-          adb wait-for-device
+          emulator_pid=$!
 
+          # Nothing here waits forever. `adb wait-for-device` does, and a step that hangs until the
+          # job times out tells a reader nothing about why.
+          appear_deadline=$(( SECONDS + 420 ))
+          echo "Waiting for the emulator to appear (pid $emulator_pid)..."
+
+          until adb devices | grep -qE '^emulator-[0-9]+[[:space:]]+device$'; do
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then
+              echo "::error::The emulator process exited before it appeared."
+              echo "--- emulator.log ---"
+              tail -80 "$RUNNER_TEMP/emulator.log" || true
+              exit 1
+            fi
+
+            if [ "$SECONDS" -ge "$appear_deadline" ]; then
+              echo "::error::The emulator did not appear within ${appear_deadline}s."
+              echo "--- emulator.log ---"
+              tail -80 "$RUNNER_TEMP/emulator.log" || true
+              exit 1
+            fi
+
+            sleep 5
+          done
+
+          echo "The emulator is visible to adb:"
+          adb devices
+
+          boot_deadline=$(( SECONDS + 600 ))
           echo "Waiting for sys.boot_completed..."
-          deadline=$(( SECONDS + 600 ))
 
           until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
-            if [ "$SECONDS" -ge "$deadline" ]; then
+            if [ "$SECONDS" -ge "$boot_deadline" ]; then
               echo "::error::The emulator did not finish booting within 600s."
-              tail -100 "$RUNNER_TEMP/emulator.log" || true
+              echo "--- emulator.log ---"
+              tail -80 "$RUNNER_TEMP/emulator.log" || true
               exit 1
             fi
 
