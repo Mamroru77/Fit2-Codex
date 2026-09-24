@@ -56,6 +56,27 @@ jobs:
             test "$code" = "200"
           done
 
+      - name: Put the SDK command-line tools on PATH
+        run: |
+          # The runner has the SDK, but sdkmanager is not on PATH. Resolve it rather than hard-coding
+          # a version directory, which changes with the runner image.
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager_path="$(find "$sdk/cmdline-tools" -maxdepth 2 -name sdkmanager -type f | head -1)"
+
+          if [ -z "$sdkmanager_path" ]; then
+            echo "::error::No sdkmanager under $sdk/cmdline-tools"
+            find "$sdk" -maxdepth 3 -name 'sdkmanager*' || true
+            exit 1
+          fi
+
+          tools_dir="$(dirname "$sdkmanager_path")"
+          echo "Using $sdkmanager_path"
+
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+          echo "$sdk/platform-tools" >> "$GITHUB_PATH"
+
       - name: Confirm the preinstalled SDK is usable
         run: |
           sdkmanager --version
