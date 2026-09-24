@@ -90,6 +90,28 @@ jobs:
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
           sdkmanager --list_installed | grep -E 'platforms;android-35|build-tools;35.0.0'
 
+      - name: Report the available toolchain versions
+        run: |
+          # Facts, not guesses: the exact AGP, Compose BOM and Kotlin versions this runner can
+          # resolve, and which Android platforms the SDK repository offers.
+          echo "=== AGP (Google Maven) ==="
+          curl -sS --max-time 60 "https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/maven-metadata.xml" \
+            | grep -oE '<version>[^<]+</version>' | tail -25
+
+          echo "=== Compose BOM (Google Maven) ==="
+          curl -sS --max-time 60 "https://dl.google.com/dl/android/maven2/androidx/compose/compose-bom/maven-metadata.xml" \
+            | grep -oE '<version>[^<]+</version>' | tail -15
+
+          echo "=== Kotlin (Maven Central) ==="
+          curl -sS --max-time 60 "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-gradle-plugin/maven-metadata.xml" \
+            | grep -oE '<version>[^<]+</version>' | tail -12
+
+          echo "=== Android platforms available ==="
+          sdkmanager --list 2>/dev/null | grep -E '^\s+platforms;android-3' | tail -12
+
+          echo "=== Build tools available ==="
+          sdkmanager --list 2>/dev/null | grep -E '^\s+build-tools;3' | tail -12
+
       - name: Note whether the Android project exists yet
         id: project
         run: |
