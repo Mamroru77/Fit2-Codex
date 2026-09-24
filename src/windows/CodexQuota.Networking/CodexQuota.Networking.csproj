@@ -1,10 +1,25 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <!--
+      Windows-only by construction: this assembly is the Windows Bridge's LAN API. It hosts Kestrel
+      on a Windows Private-profile interface, and the Bridge identity's private key lives in the
+      current Windows user's CNG key store. `net8.0-windows` is therefore the honest target, and it
+      is what makes System.Security.Cryptography.Cng available without a facade package.
+    -->
+    <TargetFramework>net8.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The Bridge identity's private key lives in the current Windows user's CNG key store. The CNG
+      types are Windows-only and are not part of the portable net8.0 ref pack, so the package is
+      required to reference them from a class library that is not a WindowsDesktop app.
+    -->
+    <PackageReference Include="System.Security.Cryptography.Cng" Version="4.3.0" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\CodexQuota.Core\CodexQuota.Core.csproj" />
