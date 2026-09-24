@@ -22,3 +22,6 @@ artifacts/
 
 # Local agent workspace data (memory, not project source)
 .workbuddy-ai/
+
+# Local execution ledger (agent scratch, not project source)
+.superpowers/
