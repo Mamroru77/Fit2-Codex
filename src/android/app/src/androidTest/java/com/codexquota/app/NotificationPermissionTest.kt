@@ -291,9 +291,20 @@ class NotificationPermissionTest {
      * reads the same app-op.
      */
     private fun setNotificationPermission(allowed: Boolean) {
-        val mode = if (allowed) "allow" else "deny"
+        // `areNotificationsEnabled` follows the runtime permission on API 33+ *and* the app-op behind
+        // it. Setting only the app-op leaves the permission revoked and the reading unchanged, which
+        // is what the first attempt did: every test then failed on "the notification permission did
+        // not become true".
+        val permission = "android.permission.POST_NOTIFICATIONS"
+        val packageName = context.packageName
 
-        shell("appops set ${context.packageName} POST_NOTIFICATION $mode")
+        if (allowed) {
+            shell("appops set $packageName POST_NOTIFICATION allow")
+            shell("pm grant $packageName $permission")
+        } else {
+            shell("pm revoke $packageName $permission")
+            shell("appops set $packageName POST_NOTIFICATION deny")
+        }
 
         awaitPermission(allowed)
     }

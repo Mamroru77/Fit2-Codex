@@ -1,6 +1,7 @@
 package com.codexquota.app.notifications
 
 import android.app.Notification
+import com.codexquota.app.R
 import android.content.Context
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -95,7 +96,7 @@ object StatusNotificationBuilder {
     /** Builds the Android notification for a status render model. */
     fun build(context: Context, model: NotificationRenderModel): Notification =
         NotificationCompat.Builder(context, model.channelId)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.ic_quota_status)
             .setContentTitle(model.title)
             .setContentText(model.text)
             .setSubText(model.subText)
@@ -114,7 +115,7 @@ object AlertNotificationBuilder {
     /** Builds the Android notification for an alert render model. */
     fun build(context: Context, model: NotificationRenderModel): Notification =
         NotificationCompat.Builder(context, model.channelId)
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setSmallIcon(R.drawable.ic_quota_status)
             .setContentTitle(model.title)
             .setContentText(model.text)
             .setSubText(model.subText)

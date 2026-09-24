@@ -23,7 +23,17 @@ import kotlinx.coroutines.launch
  */
 class MainActivity : ComponentActivity() {
 
-    private val container by lazy { AppContainer(applicationContext) }
+    /**
+     * The process-wide composition root, taken from the application.
+     *
+     * It must not be built here. An `AppContainer` of its own would be a second pairing store, a
+     * second Room database, a second connection manager and — as the instrumentation gate found — a
+     * second DataStore for the same file, which throws
+     * "There are multiple DataStores active for the same file" the moment both exist. The whole point
+     * of the container is that there is exactly one per process.
+     */
+    private val container: AppContainer
+        get() = (application as CodexQuotaApplication).container
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
