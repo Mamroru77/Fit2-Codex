@@ -68,12 +68,17 @@ class NotificationPermissionTest {
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
         NotificationChannels.ensureCreated(context)
+
+        // Every test starts from "the system will deliver", so an allowed-state test is not at the
+        // mercy of the emulator's default and a denied-state test is a change rather than a
+        // coincidence.
+        setDeliveryEnabled(enabled = true)
     }
 
     @AfterTest
     fun tearDown() {
         // Restore the real state, so a later test never inherits this one's permission change.
-        setNotificationPermission(allowed = true)
+        setDeliveryEnabled(enabled = true)
 
         manager.deleteNotificationChannel(NotificationChannels.ALERTS)
         manager.deleteNotificationChannel(NotificationChannels.STATUS)
@@ -83,15 +88,18 @@ class NotificationPermissionTest {
         scope.cancel()
     }
 
-    // --- the OS permission, genuinely changed ---------------------------------------------------
+    // --- the OS delivery state, genuinely changed -----------------------------------------------
 
     @Test
-    fun aDeniedSystemPermissionIsNotReportedAsHealthyDelivery() {
-        setNotificationPermission(allowed = false)
+    fun whenTheSystemWillNotDeliverTheAppDoesNotReportHealthyDelivery() {
+        setDeliveryEnabled(enabled = false)
 
         val health = AndroidNotificationHealthChecker(context).read()
 
-        assertFalse(health.permissionGranted, "the app must observe the denied system permission")
+        assertFalse(
+            health.permissionGranted,
+            "the app must observe that the system will not deliver notifications",
+        )
         assertFalse(health.canDeliver(NotificationChannels.STATUS))
         assertFalse(health.canDeliver(NotificationChannels.ALERTS))
         assertFalse(health.canDeliverAnything)
@@ -99,7 +107,7 @@ class NotificationPermissionTest {
 
     @Test
     fun theSettingsScreenDoesNotClaimHealthyDeliveryWhileTheSystemDeniesIt() {
-        setNotificationPermission(allowed = false)
+        setDeliveryEnabled(enabled = false)
 
         // The switch is on, but the system will not deliver. Those are different facts, and the
         // screen has to say so rather than reporting the switch.
@@ -115,8 +123,8 @@ class NotificationPermissionTest {
     }
 
     @Test
-    fun anAllowedSystemPermissionIsReportedAsHealthy() {
-        setNotificationPermission(allowed = true)
+    fun whenTheSystemWillDeliverTheAppReportsHealthyDelivery() {
+        setDeliveryEnabled(enabled = true)
 
         val health = AndroidNotificationHealthChecker(context).read()
 
@@ -167,7 +175,7 @@ class NotificationPermissionTest {
 
     @Test
     fun theStatusNotificationIsOngoingSilentAndOnTheStatusChannel() = runBlocking {
-        setNotificationPermission(allowed = true)
+        setDeliveryEnabled(enabled = true)
 
         QuotaNotificationManager(context).showStatus(
             snapshot = snapshot(),
@@ -195,7 +203,7 @@ class NotificationPermissionTest {
 
     @Test
     fun anAlertIsNotOngoingAndGoesToTheAlertChannel() = runBlocking {
-        setNotificationPermission(allowed = true)
+        setDeliveryEnabled(enabled = true)
 
         val action = AlertAction(
             window = QuotaWindowKind.ShortWindow,
@@ -229,7 +237,7 @@ class NotificationPermissionTest {
 
     @Test
     fun postingWhileTheSystemDeniesNotificationsIsSilentlyDroppedRatherThanCrashing() = runBlocking {
-        setNotificationPermission(allowed = false)
+        setDeliveryEnabled(enabled = false)
 
         val notifications = QuotaNotificationManager(context)
 
@@ -249,7 +257,7 @@ class NotificationPermissionTest {
 
     @Test
     fun theTestNotificationUsesTheStatusChannelSoTheUserCanCheckTheWholePath() = runBlocking {
-        setNotificationPermission(allowed = true)
+        setDeliveryEnabled(enabled = true)
 
         QuotaNotificationManager(context).sendTestNotification(WatchFormat.Chinese)
 
@@ -285,34 +293,46 @@ class NotificationPermissionTest {
     )
 
     /**
-     * Changes the app-op that backs the notification permission.
+     * Turns OS notification delivery on or off, without ever revoking the runtime permission.
      *
-     * This is the real OS state, not a mock: `NotificationManagerCompat.areNotificationsEnabled()`
-     * reads the same app-op.
+     * **`pm revoke` must never be called here.** This instrumentation runs inside the target
+     * package's process, and Android kills that process when its runtime permission is revoked — the
+     * framework logs `Killing com.codexquota.app: permissions revoked` and the runner dies with it.
+     * The first version of this test did exactly that, which is why only three results were ever
+     * written and neither `StageCIntegrationTest` nor `StageDRuntimeIntegrationTest` ran at all.
+     * Granting is safe; revoking is not.
+     *
+     * The state that actually decides delivery is the `POST_NOTIFICATION` app-op, and
+     * `NotificationManagerCompat.areNotificationsEnabled()` reads it. Changing an app-op does not
+     * restart anything, so the denied state can be produced from inside the process while the
+     * permission stays granted.
+     *
+     * The assertion is unchanged: the app is asked whether the system will deliver, and it has to
+     * answer truthfully about real platform state — not about a boolean a test handed it.
      */
-    private fun setNotificationPermission(allowed: Boolean) {
-        // `areNotificationsEnabled` follows the runtime permission on API 33+ *and* the app-op behind
-        // it. Setting only the app-op leaves the permission revoked and the reading unchanged, which
-        // is what the first attempt did: every test then failed on "the notification permission did
-        // not become true".
-        val permission = "android.permission.POST_NOTIFICATIONS"
+    private fun setDeliveryEnabled(enabled: Boolean) {
         val packageName = context.packageName
+        val permission = "android.permission.POST_NOTIFICATIONS"
 
-        if (allowed) {
-            shell("appops set $packageName POST_NOTIFICATION allow")
-            shell("pm grant $packageName $permission")
-        } else {
-            shell("pm revoke $packageName $permission")
-            shell("appops set $packageName POST_NOTIFICATION deny")
-        }
+        // A grant does not restart the process, and it is what makes the allowed-state tests real
+        // rather than dependent on the emulator's default.
+        shell("pm grant $packageName $permission")
 
-        awaitPermission(allowed)
+        // `ignore` is the app-op mode that means "this app does not get the operation", which is what
+        // "notifications are off" is at the platform level.
+        shell("appops set $packageName POST_NOTIFICATION ${if (enabled) "allow" else "ignore"}")
+
+        awaitDelivery(enabled)
     }
 
-    /** Waits for the platform to reflect the change, rather than sleeping a fixed amount. */
-    private fun awaitPermission(expected: Boolean, timeoutMillis: Long = TIMEOUT_MILLIS) {
+    /**
+     * Waits for the platform to reflect the change, rather than sleeping a fixed amount.
+     *
+     * This is the same call the app makes, so the wait and the assertion are about one thing.
+     */
+    private fun awaitDelivery(expected: Boolean, timeoutMillis: Long = TIMEOUT_MILLIS) {
         val deadline = System.currentTimeMillis() + timeoutMillis
-        val enabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+        val startedAs = NotificationManagerCompat.from(context).areNotificationsEnabled()
 
         while (System.currentTimeMillis() < deadline) {
             if (NotificationManagerCompat.from(context).areNotificationsEnabled() == expected) {
@@ -323,8 +343,9 @@ class NotificationPermissionTest {
         }
 
         throw AssertionError(
-            "the notification permission did not become $expected within ${timeoutMillis}ms " +
-                "(it started as $enabled)",
+            "the OS did not become ${if (expected) "willing" else "unwilling"} to deliver " +
+                "notifications within ${timeoutMillis}ms (areNotificationsEnabled started as " +
+                "$startedAs); the app-op change may not be taking effect on this device",
         )
     }
 
