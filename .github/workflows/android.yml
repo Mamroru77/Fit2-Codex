@@ -320,6 +320,32 @@ jobs:
             connectedDebugAndroidTest \
             assembleDebug
 
+      - name: Report the instrumentation failures
+        if: always()
+        run: |
+          # Gradle prints only a summary for connectedAndroidTest, so the per-test failures are read
+          # back out of the JUnit XML. A gate that fails without saying what failed costs a whole
+          # round trip to diagnose.
+          python3 - <<'PY'
+          import glob
+          import xml.etree.ElementTree as ET
+
+          paths = sorted(glob.glob('src/android/app/build/outputs/androidTest-results/**/*.xml', recursive=True))
+
+          if not paths:
+              print('No instrumentation JUnit XML was produced.')
+          else:
+              for path in paths:
+                  root = ET.parse(path).getroot()
+                  print(f"=== {path} tests={root.get('tests')} failures={root.get('failures')} errors={root.get('errors')}")
+
+                  for case in root.iter('testcase'):
+                      for failure in list(case.iter('failure')) + list(case.iter('error')):
+                          message = (failure.get('message') or '').splitlines()
+                          print(f"  FAILED {case.get('classname')}.{case.get('name')}")
+                          print('    ' + (message[0][:400] if message else '<no message>'))
+          PY
+
       - name: Publish the instrumentation results
         if: always()
         uses: actions/upload-artifact@v4
