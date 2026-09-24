@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
       V1 talks to the Bridge over the LAN only, and never over cleartext HTTP.
@@ -55,6 +56,26 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          WorkManager is initialised on demand, from the Configuration the application provides.
+
+          The default androidx.startup initializer has to be removed for that to be the only path,
+          which is what lint's RemoveWorkManagerInitializer check requires once an Application
+          implements Configuration.Provider. Leaving both in place would let WorkManager be
+          initialised from two places, and the worker factory the app installs could be the one that
+          loses.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
         <!--
           The live-mode service. `connectedDevice` is the declared type, and the service is not
