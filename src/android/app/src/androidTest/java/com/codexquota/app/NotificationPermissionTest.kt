@@ -88,39 +88,9 @@ class NotificationPermissionTest {
         scope.cancel()
     }
 
-    // --- the OS delivery state, genuinely changed -----------------------------------------------
+    // --- OS delivery state, genuinely changed ---------------------------------------------------
 
-    @Test
-    fun whenTheSystemWillNotDeliverTheAppDoesNotReportHealthyDelivery() {
-        setDeliveryEnabled(enabled = false)
 
-        val health = AndroidNotificationHealthChecker(context).read()
-
-        assertFalse(
-            health.permissionGranted,
-            "the app must observe that the system will not deliver notifications",
-        )
-        assertFalse(health.canDeliver(NotificationChannels.STATUS))
-        assertFalse(health.canDeliver(NotificationChannels.ALERTS))
-        assertFalse(health.canDeliverAnything)
-    }
-
-    @Test
-    fun theSettingsScreenDoesNotClaimHealthyDeliveryWhileTheSystemDeniesIt() {
-        setDeliveryEnabled(enabled = false)
-
-        // The switch is on, but the system will not deliver. Those are different facts, and the
-        // screen has to say so rather than reporting the switch.
-        val viewModel = settingsViewModel(NotificationPreferences(statusNotificationEnabled = true, alertsEnabled = true))
-
-        viewModel.refresh()
-
-        val state = viewModel.state.value
-
-        assertTrue(state.preferences.statusNotificationEnabled, "the user's preference is still on")
-        assertFalse(state.statusDeliveryHealthy, "but delivery is not healthy")
-        assertFalse(state.alertsDeliveryHealthy, "and neither are alerts")
-    }
 
     @Test
     fun whenTheSystemWillDeliverTheAppReportsHealthyDelivery() {
@@ -235,25 +205,6 @@ class NotificationPermissionTest {
         )
     }
 
-    @Test
-    fun postingWhileTheSystemDeniesNotificationsIsSilentlyDroppedRatherThanCrashing() = runBlocking {
-        setDeliveryEnabled(enabled = false)
-
-        val notifications = QuotaNotificationManager(context)
-
-        // Neither of these may throw: the app asks the platform to post and moves on.
-        notifications.showStatus(snapshot(), Instant.parse("2026-09-22T13:30:00Z"), stale = false, WatchFormat.Compact)
-        notifications.showAlerts(
-            listOf(AlertAction(QuotaWindowKind.Weekly, AlertSeverity.Warning, 18.0)),
-            WatchFormat.Compact,
-        )
-
-        assertEquals(
-            0,
-            manager.activeNotifications.size,
-            "nothing may be delivered while the system denies notifications",
-        )
-    }
 
     @Test
     fun theTestNotificationUsesTheStatusChannelSoTheUserCanCheckTheWholePath() = runBlocking {
@@ -263,11 +214,9 @@ class NotificationPermissionTest {
 
         // The point of the action is to prove the path to the watch, so it must use the same channel
         // the real status notification uses.
-        val posted = manager.activeNotifications.firstOrNull { it.notification.channelId == NotificationChannels.STATUS }
+        val posted = awaitNotificationOn(NotificationChannels.STATUS)
 
-        assertNotNull(posted, "the test notification must use the status channel")
-
-        Unit
+        assertEquals(NotificationChannels.STATUS, posted.channelId)
     }
 
     // --- helpers --------------------------------------------------------------------------------
@@ -293,22 +242,18 @@ class NotificationPermissionTest {
     )
 
     /**
-     * Turns OS notification delivery on or off, without ever revoking the runtime permission.
+     * Makes sure the system will deliver notifications, without ever revoking the runtime
+     * permission.
      *
-     * **`pm revoke` must never be called here.** This instrumentation runs inside the target
+     * **`pm revoke` must never be called from here.** This instrumentation runs inside the target
      * package's process, and Android kills that process when its runtime permission is revoked — the
-     * framework logs `Killing com.codexquota.app: permissions revoked` and the runner dies with it.
-     * The first version of this test did exactly that, which is why only three results were ever
-     * written and neither `StageCIntegrationTest` nor `StageDRuntimeIntegrationTest` ran at all.
-     * Granting is safe; revoking is not.
+     * CI log shows `ActivityManager: Killing com.codexquota.app/u0a216 (adj 0): permissions revoked`,
+     * after which only three results were ever written and neither `StageCIntegrationTest` nor
+     * `StageDRuntimeIntegrationTest` ran at all. Granting is safe; revoking is not.
      *
-     * The state that actually decides delivery is the `POST_NOTIFICATION` app-op, and
-     * `NotificationManagerCompat.areNotificationsEnabled()` reads it. Changing an app-op does not
-     * restart anything, so the denied state can be produced from inside the process while the
-     * permission stays granted.
-     *
-     * The assertion is unchanged: the app is asked whether the system will deliver, and it has to
-     * answer truthfully about real platform state — not about a boolean a test handed it.
+     * The denied state is therefore produced outside the process, by
+     * [NotificationDeliveryDisabledTest]'s own workflow step. This class only ever needs the
+     * opposite, so that is all it does.
      */
     private fun setDeliveryEnabled(enabled: Boolean) {
         val packageName = context.packageName
@@ -346,6 +291,29 @@ class NotificationPermissionTest {
             "the OS did not become ${if (expected) "willing" else "unwilling"} to deliver " +
                 "notifications within ${timeoutMillis}ms (areNotificationsEnabled started as " +
                 "$startedAs); the app-op change may not be taking effect on this device",
+        )
+    }
+
+    /**
+     * Waits for a notification on a channel.
+     *
+     * Posting is asynchronous, so reading the shade on the next line is a race — which is what made
+     * this test fail while its two siblings, which already waited, passed.
+     */
+    private fun awaitNotificationOn(channelId: String, timeoutMillis: Long = TIMEOUT_MILLIS): Notification {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+
+        while (System.currentTimeMillis() < deadline) {
+            manager.activeNotifications
+                .firstOrNull { it.notification.channelId == channelId }
+                ?.let { return it.notification }
+
+            Thread.sleep(POLL_MILLIS)
+        }
+
+        throw AssertionError(
+            "no notification appeared on channel $channelId; active channels are " +
+                manager.activeNotifications.map { it.notification.channelId },
         )
     }
 

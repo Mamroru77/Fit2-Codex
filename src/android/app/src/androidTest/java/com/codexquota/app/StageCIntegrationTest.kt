@@ -68,13 +68,31 @@ class StageCIntegrationTest {
     }
 
     private fun repository(): QuotaRepository {
-        val db = Room.databaseBuilder(context, AppDatabase::class.java, "stage-c-test.db")
+        val db = database()
+
+        return QuotaRepository(
+            OkHttpBridgeApi.create(pairedBridge(), credential()),
+            RoomQuotaCache(db.quotaDao()),
+        )
+    }
+
+    /**
+     * An in-memory database, one per test.
+     *
+     * A file-backed one persisted between tests, so a test could observe a snapshot an earlier test
+     * had cached — which made "a bad document must not overwrite the cache" and "a fresh fetch is
+     * `Updated`" fail for reasons unrelated to the behaviour under test.
+     */
+    private fun database(): AppDatabase {
+        database?.let { return it }
+
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
 
         database = db
 
-        return QuotaRepository(OkHttpBridgeApi.create(pairedBridge(), credential()), RoomQuotaCache(db.quotaDao()))
+        return db
     }
 
     /** A store over an in-memory file, so nothing of this test reaches the device's real storage. */

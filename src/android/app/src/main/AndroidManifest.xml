@@ -28,6 +28,16 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <!--
+      Android 14 requires a prerequisite for each foreground service type, and for `connectedDevice`
+      over a network the documented one is CHANGE_NETWORK_STATE (the alternatives cover Bluetooth,
+      NFC, IR and USB). Without it startForeground throws SecurityException and live mode cannot
+      start at all — which is exactly what the runtime gate found on API 36.
+
+      It is a normal permission, so it is granted at install and there is nothing to request.
+    -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+
+    <!--
       Required from Android 13 to show either notification. The app checks it before claiming that
       notifications are being delivered.
     -->

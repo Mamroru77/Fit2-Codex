@@ -313,12 +313,54 @@ jobs:
         run: |
           chmod +x ./gradlew
 
-          # The complete Stage C and Stage D gate, in one place, on a real Android runtime.
+          # The Stage C and Stage D runtime gates, on a real Android runtime.
+          #
+          # `NotificationDeliveryDisabledTest` is excluded here and run in its own step below. It
+          # needs POST_NOTIFICATIONS revoked, and revoking a runtime permission kills the process
+          # that holds it — which is this instrumentation process. The CI log shows the framework
+          # doing exactly that, after which only three results were ever written and the Stage C and
+          # Stage D classes never ran. Permission state that can kill the app has to change between
+          # instrumentation processes, never inside one.
           ./gradlew --no-daemon \
             testDebugUnitTest \
             lintDebug \
             connectedDebugAndroidTest \
-            assembleDebug
+            assembleDebug \
+            -Pandroid.testInstrumentationRunnerArguments.notClass=com.codexquota.app.NotificationDeliveryDisabledTest
+
+      - name: Install the APKs for the delivery-disabled gate
+        run: |
+          # `connectedDebugAndroidTest` uninstalls the APKs when it finishes, so they are installed
+          # again for the separate invocation. `-t` is what allows a test-only APK.
+          adb install -r -t src/android/app/build/outputs/apk/debug/app-debug.apk
+          adb install -r -t src/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+
+      - name: Run the delivery-disabled gate with the permission revoked beforehand
+        run: |
+          package=com.codexquota.app
+
+          # The state is set here, before any instrumentation process exists, because doing it from
+          # inside one kills it.
+          adb shell pm revoke "$package" android.permission.POST_NOTIFICATIONS || true
+
+          out=$(adb shell am instrument -w -r \
+            -e class "$package.NotificationDeliveryDisabledTest" \
+            "$package.test/androidx.test.runner.AndroidJUnitRunner")
+
+          echo "$out"
+
+          # Restored immediately, so nothing later inherits the change.
+          adb shell pm grant "$package" android.permission.POST_NOTIFICATIONS || true
+
+          if echo "$out" | grep -q 'FAILURES!!!'; then
+            echo "::error::The delivery-disabled gate failed."
+            exit 1
+          fi
+
+          if ! echo "$out" | grep -q 'OK ('; then
+            echo "::error::The delivery-disabled gate did not report success."
+            exit 1
+          fi
 
       - name: Capture the device log
         if: always()
@@ -328,11 +370,15 @@ jobs:
           # is to guess.
           adb logcat -d -v time > "$RUNNER_TEMP/logcat.txt" 2>/dev/null || true
 
-          echo "=== crashes and our own output ==="
-          grep -nE 'FATAL EXCEPTION|AndroidRuntime|E AndroidRuntime' "$RUNNER_TEMP/logcat.txt" | tail -40 || true
+          echo "=== crashes ==="
+          grep -nE 'FATAL EXCEPTION|E AndroidRuntime' "$RUNNER_TEMP/logcat.txt" | tail -40 || true
+
+          echo "=== foreground services and permission changes ==="
+          grep -nE 'ForegroundService|startForeground|permissions revoked|ActivityManager: Killing|SecurityException|DataStore' \
+            "$RUNNER_TEMP/logcat.txt" | tail -60 || true
 
           echo "=== lines mentioning the app ==="
-          grep -n 'com.codexquota' "$RUNNER_TEMP/logcat.txt" | tail -120 || true
+          grep -n 'com.codexquota' "$RUNNER_TEMP/logcat.txt" | tail -200 || true
 
       - name: Report the instrumentation failures
         if: always()

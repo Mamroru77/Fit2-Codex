@@ -417,10 +417,19 @@ class StageDRuntimeIntegrationTest {
         }
     }
 
+    /**
+     * An in-memory database, one per test.
+     *
+     * A file-backed one persisted between tests, so an alert test could find a `CriticalTriggered`
+     * state an earlier test had stored, correctly decide there was nothing new to deliver, and fail
+     * an assertion that was really about test isolation. The assertions about persistence are still
+     * real: they build a second `AlertProcessingRepository` over the same store, which is exactly
+     * what a process restart produces.
+     */
     private fun database(): AppDatabase {
         database?.let { return it }
 
-        val db = Room.databaseBuilder(context, AppDatabase::class.java, "stage-d-runtime-test.db")
+        val db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
             .build()
 
