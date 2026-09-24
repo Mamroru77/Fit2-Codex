@@ -1,45 +1,59 @@
 # V1 Device Validation Record
 
-**Status:** `ANDROID DEVELOPMENT IN PROGRESS` · `PHYSICAL STAGE E VALIDATION PENDING`
+**Status:** `DEVELOPMENT COMPLETE` · `AUTOMATED VERIFICATION COMPLETE` · `PHYSICAL STAGE E VALIDATION PENDING`
 
-Earlier revisions of this file said `DEVELOPMENT COMPLETE` while also saying that Stage C and Stage D
-were not implemented. That was premature and has been corrected. The truthful status is:
+Every automated gate the approved plans name is green. The physical acceptance matrix below has not
+been run, and no row in it claims a result.
 
 ```text
 WINDOWS DEVELOPMENT COMPLETE
 STAGE B COMPLETE
-ANDROID DEVELOPMENT IN PROGRESS
+STAGE C COMPLETE
+STAGE D COMPLETE
 PHYSICAL STAGE E VALIDATION PENDING
 ```
 
-Android development is "in progress" rather than complete because the approved plans' instrumented
-tests (Stage C Task 8 and Stage D Task 8) have not been written or run. Everything that can be
-verified without a device is verified below.
+## Verified commits and runs
 
-Every row below is an acceptance criterion from the approved spec (§33) and the Stage E plan. Rows
-that require the physical chain are marked **PENDING_MANUAL_DEVICE_VALIDATION** and were **not**
-run. Nothing in this file claims a physical result that was not observed.
+| Item | Value |
+|---|---|
+| Verified commit (both Android gates) | `d241a551a67742f033a017dbbd59e2d392d139` |
+| Tags | `stage-c-android-foundation` and `stage-d-android-alerts`, both on that commit |
+| Final CI run | `36039193067` — both jobs `success` |
+| Emulator API | **36** (`system-images;android-36;google_apis;x86_64`) |
+
+Both Android tags point at the same commit, because the Stage C and Stage D runtime gates were
+implemented together and this is the first commit at which either of them ran green. A tag on an
+earlier commit would name a gate that was never green.
+
+## Automated gates
+
+| Gate | Where | Result |
+|---|---|---|
+| Windows Release suite | `dotnet test src/windows/CodexQuota.sln -c Release` | **266 passed, 0 failed** |
+| Real Codex runtime | `dotnet run -c Release --project tests/windows/CodexQuota.RealRuntimeCheck` | PASS (4/4 checks) |
+| Android JVM unit tests | `gradlew :app:testDebugUnitTest` | **201 passed, 0 failed** |
+| Android instrumentation | `gradlew :app:connectedDebugAndroidTest` on API 36 | **37 passed, 0 failed** |
+| Android delivery-disabled gate | `adb shell am instrument` with `POST_NOTIFICATIONS` revoked | **3 passed, 0 failed** |
+| Android lint | `gradlew :app:lintDebug` | **PASS** — no errors |
+| Android assemble | `gradlew :app:assembleDebug` | **PASS** |
+| APK | `artifacts/android/app-debug.apk` | 37,001,119 bytes, SHA-256 `28046f7f7106e245f73a3d69644e3fedc07ac0e1ea0341c889684f12f70be197` |
+
+Instrumentation is 40 tests across two invocations. They are separate because the denied-delivery
+tests need `POST_NOTIFICATIONS` revoked, and revoking a runtime permission kills the process that
+holds it — so that state is set from `adb` between instrumentation processes, and
+`connectedDebugAndroidTest` excludes the class by name.
 
 ## Devices and versions
 
 | Item | Value |
 |---|---|
 | Windows build | _to be recorded on the day_ |
-| Bridge commit (final) | `d28514c` |
-| Android APK commit | `d28514c` — the first commit at which the Android application builds |
+| Verified commit | `d241a55` |
+| Android APK commit | `d241a55` |
 | OPPO Find X8 Android / ColorOS | _to be recorded on the day_ |
 | HUAWEI Health version | _to be recorded on the day_ |
 | HUAWEI WATCH FIT 2 firmware | _to be recorded on the day_ |
-
-## Automated gates already green
-
-| Gate | Command | Result |
-|---|---|---|
-| Windows Release suite | `dotnet test src/windows/CodexQuota.sln -c Release` | 266 passed, 0 failed |
-| Real Codex runtime | `dotnet run -c Release --project tests/windows/CodexQuota.RealRuntimeCheck` | PASS (4/4 checks) |
-| Android unit tests | `gradlew :app:testDebugUnitTest` | 168 passed, 0 failed |
-| Android build + lint (CI) | GitHub Actions `Android`, run `35997777459` | see the Android status section |
-| Android toolchain (CI) | GitHub Actions `Android`, run `35978620889` | success |
 
 ## Physical acceptance matrix
 
@@ -96,8 +110,8 @@ workaround is implemented — and none has been.
 
 ## Android status
 
-Stage C and Stage D are implemented. The application builds, lints and passes its unit tests on a
-GitHub-hosted runner, which is the authoritative gate because this development machine cannot reach
+Stage C and Stage D are implemented, and both runtime gates are green on a GitHub-hosted runner.
+That runner is the authoritative environment because this development machine cannot reach
 `dl.google.com` or `maven.google.com`:
 
 | Host | From this machine | From a GitHub runner |
@@ -106,36 +120,34 @@ GitHub-hosted runner, which is the authoritative gate because this development m
 | `dl.google.com/dl/android/maven2` (AGP) | `curl: (7) CONNECT tunnel failed, response 502` | HTTP 200 |
 | `maven.google.com` | `curl: (35) schannel: handshake failed` | HTTP 200 |
 
-| Gate | Where | Result |
-|---|---|---|
-| `testDebugUnitTest` | CI run `35997777459` | PASS — the task ran and the build succeeded; the same 168 tests pass on this machine |
-| `lintDebug` | CI run `35997777459` | PASS — no errors (lint aborts the build on any) |
-| `assembleDebug` | CI run `35997777459` | PASS |
-| Build | CI run `35997777459` | `BUILD SUCCESSFUL in 3m 24s`, 53 tasks executed |
-| APK artifact | CI run `35997777459` | `android-reports.zip`, 12,979,799 bytes, artifact id `10806923407` |
-| APK path inside the artifact | — | `outputs/apk/debug/app-debug.apk` (the artifact root is `app/build`) |
-| Local APK | this machine | `artifacts/android/app-debug.apk`, 36,497,614 bytes, SHA-256 `8e593df8ebf95d3394c8271a9119966bf099a1d29a81a68e5d0882615a61b8f0` |
+The application also builds, lints and passes its unit tests **on this machine**, by supplying the
+toolchain from reachable mirrors. That is how the runtime gate's failures were diagnosed in minutes
+rather than in CI round trips, and it is why the gate found six product defects rather than one.
 
-The CI artifact of run `35997777459` predates a workflow fix that adds `app/build/test-results/**`
-to the uploaded paths. That run's JUnit XML was therefore not preserved, so its unit-test result rests
-on the task having run and the build having succeeded, plus the identical suite passing locally. Later
-runs carry the XML.
+### What the runtime gate found
 
-The same 168 tests also pass on this machine, which is how the five defects listed in the execution
-ledger were found.
+It was not a formality. Running the instrumentation suite on a real Android runtime exposed six
+defects that no JVM test could have:
+
+1. `PairedBridgeTrustManagerFactory` built its trust manager from `CertPathTrustManagerParameters`,
+   which Android rejects. **Every authenticated REST and WebSocket request would have failed on a
+   real device**, after pairing had appeared to succeed.
+2. `MainActivity` built its own `AppContainer`, giving the process two pairing stores, two Room
+   databases, two connection managers and two DataStores for one file.
+3. `LiveBridgeService` posted its foreground notification without creating the channel it names.
+4. The `connectedDevice` foreground service declared none of Android 14's prerequisites, so
+   `startForeground` threw and live mode could not start at all.
+5. `CodexQuotaWorkerFactory` was never installed, so background mode would have enqueued a worker
+   that always failed.
+6. Both notifications used framework drawables as their small icon, which `startForeground` rejects.
 
 ### What is not verified, and why
 
-- **Instrumented tests.** The approved plans' Stage C Task 8 and Stage D Task 8 call for
-  `connectedDebugAndroidTest`. No instrumentation source has been written, because there is no
-  emulator on this machine and the CI job does not start one. Rows 4–19 below therefore cannot be
-  attempted from either environment yet.
-- **The `_codexquota._tcp` discovery adapter** is compiled and linted but has no automated test: the
-  real `NsdManager` needs a device, and a fake would only test the fake.
-- **`KeystoreSecretBox`** is compiled and linted but not unit-tested: the Android Keystore is not
-  available on the JVM. Its contract is narrow (seal/open with AES/GCM under a non-exportable key) and
-  everything above it depends on the `SecretBox` interface, which is tested with an authenticated
-  fake.
+- **The physical chain.** Rows 1–19 below need the real devices.
+- **`NsdBridgeDiscovery`.** Compiled and linted, but not unit-tested: the real `NsdManager` needs a
+  device, and a fake would only test the fake. mDNS discovery remains part of the physical chain.
+- **`KeystoreSecretBox`** is now covered on a device by `KeystoreSecretBoxTest` — round trip, no
+  plaintext in the sealed bytes, and a tampered ciphertext or IV failing the GCM tag.
 
 ## Install commands
 
@@ -147,10 +159,12 @@ Windows (once the package is published to `artifacts/windows`):
 artifacts\windows\CodexQuota.Desktop.exe
 ```
 
-Android (download `android-reports.zip` from CI run `35997777459`, then):
+Android — the verified build is `artifacts/android/app-debug.apk` (SHA-256
+`28046f7f7106e245f73a3d69644e3fedc07ac0e1ea0341c889684f12f70be197`), and the same APK is inside the
+`android-reports` artifact of CI run `36039193067`:
 
 ```powershell
-adb install -r app-debug.apk
+adb install -r artifacts\android\app-debug.apk
 ```
 
 Or build it locally:
