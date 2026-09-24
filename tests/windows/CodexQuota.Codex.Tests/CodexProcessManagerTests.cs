@@ -307,10 +307,14 @@ public class CodexProcessManagerTests
 public class CodexAppServerProcessTests
 {
     [Fact]
-    public void StartInfoMatchesTheDocumentedLaunchContract()
+    public void StandaloneAppServerLaunchContractMatchesTheDocumentedShape()
     {
-        var startInfo = CodexAppServerProcess.CreateStartInfo(
+        var runtime = new CodexRuntime(
             @"C:\app\runtime\codex-app-server.exe",
+            [CodexRuntimeLocator.ListenArgument, CodexRuntimeLocator.StdioTransport]);
+
+        var startInfo = CodexAppServerProcess.CreateStartInfo(
+            runtime,
             @"C:\Users\me\AppData\Local\CodexQuotaBridge\codex-home");
 
         Assert.False(startInfo.UseShellExecute);
@@ -323,6 +327,32 @@ public class CodexAppServerProcessTests
         Assert.Equal(
             @"C:\Users\me\AppData\Local\CodexQuotaBridge\codex-home",
             startInfo.Environment["CODEX_HOME"]);
+    }
+
+    [Fact]
+    public void ResolvesTheStandaloneBinaryWhenOneIsPackaged()
+    {
+        using var workspace = new TemporaryRuntimeDirectory();
+        workspace.PlaceFile(CodexRuntimeLocator.AppServerFileName);
+
+        var runtime = CodexRuntimeLocator.ResolveRuntime(workspace.Path);
+
+        Assert.Equal(Path.Combine(workspace.Path, "runtime", "codex-app-server.exe"), runtime.ExecutablePath);
+        Assert.Equal(new[] { "--listen", "stdio://" }, runtime.Arguments);
+    }
+
+    [Fact]
+    public void FallsBackToTheCodexCliAppServerSubcommand()
+    {
+        using var workspace = new TemporaryRuntimeDirectory();
+        workspace.PlaceFile(CodexRuntimeLocator.CodexCliFileName);
+
+        var runtime = CodexRuntimeLocator.ResolveRuntime(workspace.Path);
+
+        // The official distribution ships the App Server as a subcommand of the CLI, not as a
+        // standalone binary, so the launch configuration has to carry that subcommand.
+        Assert.Equal(Path.Combine(workspace.Path, "runtime", "codex.exe"), runtime.ExecutablePath);
+        Assert.Equal(new[] { "app-server", "--listen", "stdio://" }, runtime.Arguments);
     }
 
     [Fact]
@@ -339,6 +369,32 @@ public class CodexAppServerProcessTests
         Assert.Equal(
             Path.Combine(@"C:\Users\me\AppData\Local", "CodexQuotaBridge", "codex-home"),
             CodexRuntimeLocator.ResolveCodexHome(@"C:\Users\me\AppData\Local"));
+    }
+}
+
+/// <summary>A throwaway directory laid out like a packaged Bridge, for runtime resolution.</summary>
+internal sealed class TemporaryRuntimeDirectory : IDisposable
+{
+    internal TemporaryRuntimeDirectory()
+    {
+        Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"codexquota-runtime-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(System.IO.Path.Combine(Path, "runtime"));
+    }
+
+    internal string Path { get; }
+
+    internal void PlaceFile(string fileName)
+        => File.WriteAllText(System.IO.Path.Combine(Path, "runtime", fileName), string.Empty);
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(Path, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
     }
 }
 

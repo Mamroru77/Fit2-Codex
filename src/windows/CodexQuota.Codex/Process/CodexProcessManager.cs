@@ -82,11 +82,11 @@ public sealed class CodexProcessManager : IAsyncDisposable
     private volatile CodexProcessStatus _status = CodexProcessStatus.Stopped;
 
     /// <summary>
-    /// Production constructor: launches the supported binary shipped beside the desktop executable.
+    /// Production constructor: launches the supported runtime shipped beside the desktop executable.
     /// </summary>
-    public CodexProcessManager(string appServerPath, string codexHomePath, RestartBackoff backoff)
+    public CodexProcessManager(CodexRuntime runtime, string codexHomePath, RestartBackoff backoff)
         : this(
-            _ => Task.FromResult<ICodexProcess>(CodexAppServerProcess.Start(appServerPath, codexHomePath)),
+            _ => Task.FromResult<ICodexProcess>(CodexAppServerProcess.Start(runtime, codexHomePath)),
             backoff,
             new SystemCodexTimeSource())
     {

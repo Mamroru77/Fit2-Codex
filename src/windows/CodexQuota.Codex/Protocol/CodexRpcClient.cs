@@ -28,6 +28,9 @@ public sealed class CodexRpcClient : IAsyncDisposable
         },
     };
 
+    /// <summary>Sent as <c>params</c> for a method that takes none.</summary>
+    private static readonly object EmptyParameters = new Dictionary<string, object>();
+
     private readonly IJsonRpcTransport _transport;
     private readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement>> _pending = new();
     private readonly Channel<CodexNotification> _notifications = Channel.CreateUnbounded<CodexNotification>();
@@ -283,9 +286,17 @@ public sealed class CodexRpcClient : IAsyncDisposable
     }
 
     private static string BuildRequest(string method, long id, object? @params)
-        => @params is null
-            ? JsonSerializer.Serialize(new { method, id }, SerializerOptions)
-            : JsonSerializer.Serialize(new { method, id, @params }, SerializerOptions);
+    {
+        // The `params` member is always present, even for a method that takes none. JSON-RPC 2.0
+        // makes it optional, but the real Codex App Server does not: a request without it is
+        // rejected outright with
+        //   {"code":-32600,"message":"Invalid request: missing field `params`"}
+        // which is exactly the shape of `account/read`, `account/rateLimits/read` and
+        // `account/logout`. Sending an empty object is the interoperable form.
+        var parameters = @params ?? EmptyParameters;
+
+        return JsonSerializer.Serialize(new { method, id, @params = parameters }, SerializerOptions);
+    }
 
     private static string BuildNotification(string method, object? @params)
         => @params is null

@@ -65,7 +65,7 @@ public partial class App : System.Windows.Application
         var viewModel = new StatusViewModel(store, runtime);
         builder.Services.AddSingleton(viewModel);
 
-        var appServerPath = CodexRuntimeLocator.ResolveAppServerPath(AppContext.BaseDirectory);
+        var codexRuntime = CodexRuntimeLocator.ResolveRuntime(AppContext.BaseDirectory);
         var codexHome = CodexRuntimeLocator.ResolveCodexHome(localAppData);
 
         builder.Services.AddSingleton<IHostedService>(services =>
@@ -76,7 +76,7 @@ public partial class App : System.Windows.Application
             var logger = services.GetRequiredService<ILoggerFactory>().CreateLogger("CodexQuota.Codex");
 
             return new BridgeHostedService(
-                appServerPath,
+                codexRuntime,
                 codexHome,
                 store,
                 runtime,

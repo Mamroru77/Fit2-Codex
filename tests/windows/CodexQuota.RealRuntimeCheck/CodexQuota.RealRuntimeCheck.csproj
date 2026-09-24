@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Deliberately NOT part of CodexQuota.sln: it requires a real Codex runtime installed on the
+    machine, so it must never affect the deterministic automated gate
+    `dotnet test src/windows/CodexQuota.sln -c Release`.
+
+    Run it explicitly from the repository root, pointing `dotnet run` at this project directory:
+      dotnet run -c Release (project) tests/windows/CodexQuota.RealRuntimeCheck
+    where (project) is written as two dashes followed by the word project.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>CodexQuota.RealRuntimeCheck</AssemblyName>
+    <RootNamespace>CodexQuota.RealRuntimeCheck</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\windows\CodexQuota.Codex\CodexQuota.Codex.csproj" />
+  </ItemGroup>
+
+</Project>

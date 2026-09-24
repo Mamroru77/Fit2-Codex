@@ -57,6 +57,37 @@ public class CodexRpcClientTests
     }
 
     [Fact]
+    public async Task ARequestWithoutParametersStillCarriesAnEmptyParamsObject()
+    {
+        var transport = new FakeJsonRpcTransport();
+        await using var client = new CodexRpcClient(transport);
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        var initialize = client.InitializeAsync(timeout.Token);
+        await transport.WaitForWritesAsync(1, timeout.Token);
+        transport.EnqueueLine("""{"id":1,"result":{}}""");
+        await initialize;
+
+        // Found by driving the real Codex App Server: it rejects a request that omits `params`
+        // outright with
+        //   {"code":-32600,"message":"Invalid request: missing field `params`"}
+        // so a method with nothing to send must still send an empty object. `account/read`,
+        // `account/rateLimits/read` and `account/logout` are all in that shape.
+        var call = client.CallAsync<JsonElement>("account/read", null, timeout.Token);
+        await transport.WaitForWritesAsync(3, timeout.Token);
+
+        var request = Parse(transport.WrittenLines[2]);
+        Assert.Equal("account/read", request.GetProperty("method").GetString());
+
+        Assert.True(request.TryGetProperty("params", out var parameters), "The request omitted `params`.");
+        Assert.Equal(JsonValueKind.Object, parameters.ValueKind);
+        Assert.False(parameters.EnumerateObject().Any());
+
+        transport.EnqueueLine("""{"id":2,"result":{}}""");
+        await call;
+    }
+
+    [Fact]
     public async Task CallAsyncBeforeInitializationIsRejected()
     {
         var transport = new FakeJsonRpcTransport();

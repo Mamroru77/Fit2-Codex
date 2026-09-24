@@ -21,4 +21,14 @@
     <ProjectReference Include="..\CodexQuota.Storage\CodexQuota.Storage.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The supported Codex runtime is packaged into the fixed `runtime/` folder beside the desktop
+      executable. It is not vendored in the repository, so this only copies it when a packager has
+      placed it there; the Bridge resolves the standalone app-server binary if present and the
+      Codex CLI `app-server` subcommand otherwise.
+    -->
+    <None Include="runtime\**\*" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
 </Project>

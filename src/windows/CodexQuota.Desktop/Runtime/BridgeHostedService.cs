@@ -36,11 +36,11 @@ public sealed class BridgeHostedService : IHostedService, IAsyncDisposable
     private Task? _historyRun;
     private bool _stopped;
 
-    /// <summary>Production composition: launches the supported binary shipped beside the host.</summary>
-    /// <param name="appServerPath">Path of the supported <c>codex-app-server.exe</c>.</param>
+    /// <summary>Production composition: launches the supported runtime shipped beside the host.</summary>
+    /// <param name="runtime">The supported runtime to launch.</param>
     /// <param name="codexHomePath">Isolated <c>CODEX_HOME</c> for the child.</param>
     /// <param name="store">The quota state store every published snapshot goes through.</param>
-    /// <param name="runtime">Observable Bridge runtime state.</param>
+    /// <param name="runtimeState">Observable Bridge runtime state.</param>
     /// <param name="history">Persistence for published snapshots.</param>
     /// <param name="backoff">Restart policy; the documented default when omitted.</param>
     /// <param name="onStderrLine">
@@ -52,19 +52,19 @@ public sealed class BridgeHostedService : IHostedService, IAsyncDisposable
     /// termination.
     /// </param>
     public BridgeHostedService(
-        string appServerPath,
+        CodexRuntime runtime,
         string codexHomePath,
         IQuotaStateStore store,
-        BridgeRuntimeState runtime,
+        BridgeRuntimeState runtimeState,
         HistoryPersistenceWorker history,
         RestartBackoff? backoff = null,
         Action<string>? onStderrLine = null,
         Action<string>? onDiagnostic = null)
         : this(
             _ => Task.FromResult<ICodexProcess>(
-                CodexAppServerProcess.Start(appServerPath, codexHomePath, onStderrLine, onDiagnostic)),
+                CodexAppServerProcess.Start(runtime, codexHomePath, onStderrLine, onDiagnostic)),
             store,
-            runtime,
+            runtimeState,
             history,
             backoff,
             null)

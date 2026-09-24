@@ -133,25 +133,27 @@ public sealed class CodexAppServerProcess : ICodexProcess
     internal int ProcessId => _process.Id;
 
     /// <summary>
-    /// Builds the launch configuration for the supported App Server binary.
+    /// Builds the launch configuration for the supported runtime.
     /// </summary>
-    public static ProcessStartInfo CreateStartInfo(string appServerPath, string codexHomePath)
+    public static ProcessStartInfo CreateStartInfo(CodexRuntime runtime, string codexHomePath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(appServerPath);
+        ArgumentNullException.ThrowIfNull(runtime);
         ArgumentException.ThrowIfNullOrWhiteSpace(codexHomePath);
 
-        var startInfo = new ProcessStartInfo(appServerPath)
+        var startInfo = new ProcessStartInfo(runtime.ExecutablePath)
         {
             UseShellExecute = false,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(appServerPath)) ?? string.Empty,
+            WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(runtime.ExecutablePath)) ?? string.Empty,
         };
 
-        startInfo.ArgumentList.Add("--listen");
-        startInfo.ArgumentList.Add("stdio://");
+        foreach (var argument in runtime.Arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
 
         // Isolate Bridge authentication/configuration from Codex Desktop state.
         startInfo.Environment["CODEX_HOME"] = codexHomePath;
@@ -163,7 +165,7 @@ public sealed class CodexAppServerProcess : ICodexProcess
     /// Starts the App Server, gives stderr its only continuous consumer, and binds a JSONL
     /// transport to the child's stdout.
     /// </summary>
-    /// <param name="appServerPath">Path of the supported <c>codex-app-server.exe</c>.</param>
+    /// <param name="runtime">The supported runtime to launch.</param>
     /// <param name="codexHomePath">Isolated <c>CODEX_HOME</c> for the child.</param>
     /// <param name="onStderrLine">
     /// Optional sink for stderr lines, so the child's own diagnostics reach the log. It is isolated
@@ -174,11 +176,11 @@ public sealed class CodexAppServerProcess : ICodexProcess
     /// survived termination.
     /// </param>
     public static CodexAppServerProcess Start(
-        string appServerPath,
+        CodexRuntime runtime,
         string codexHomePath,
         Action<string>? onStderrLine = null,
         Action<string>? onDiagnostic = null)
-        => StartFrom(CreateStartInfo(appServerPath, codexHomePath), onStderrLine, onDiagnostic);
+        => StartFrom(CreateStartInfo(runtime, codexHomePath), onStderrLine, onDiagnostic);
 
     /// <summary>
     /// Starts an already-configured child. The production path above builds the supported
