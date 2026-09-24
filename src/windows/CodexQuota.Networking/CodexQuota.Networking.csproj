@@ -24,6 +24,7 @@
       required to reference them from a class library that is not a WindowsDesktop app.
     -->
     <PackageReference Include="System.Security.Cryptography.Cng" Version="4.3.0" />
+    <PackageReference Include="Systola.Makaretu.Dns.Multicast" Version="2026.3.12" />
   </ItemGroup>
 
   <ItemGroup>

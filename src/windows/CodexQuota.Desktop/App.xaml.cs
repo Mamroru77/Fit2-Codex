@@ -13,7 +13,12 @@ using CodexQuota.Desktop.Runtime;
 using CodexQuota.Desktop.Tray;
 using CodexQuota.Desktop.ViewModels;
 using CodexQuota.Desktop.Views;
+using CodexQuota.Networking.Auth;
+using CodexQuota.Networking.Discovery;
+using CodexQuota.Networking.Pairing;
+using CodexQuota.Networking.Security;
 using CodexQuota.Storage.Database;
+using CodexQuota.Storage.Devices;
 using CodexQuota.Storage.History;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,9 +36,22 @@ public partial class App : System.Windows.Application
     private IHost? _host;
     private TrayController? _tray;
     private StatusWindow? _window;
+    private PairingQrWindow? _pairingWindow;
+    private PairingViewModel? _pairingViewModel;
     private BridgeDatabase? _database;
+    private BridgeIdentity? _bridgeIdentity;
     private string? _logsDirectory;
     private bool _exiting;
+
+    /// <summary>
+    /// The LAN endpoint the phone should connect to, once the API host is listening. It is
+    /// <c>null</c> until then, which is a real state: without an eligible interface there is no
+    /// address to put in a QR code.
+    /// </summary>
+    private BridgeEndpointAddress? _endpoint;
+
+    /// <summary>Where a paired phone should connect. Set when the API host has started.</summary>
+    internal sealed record BridgeEndpointAddress(string Host, int Port);
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -68,6 +86,27 @@ public partial class App : System.Windows.Application
         var codexRuntime = CodexRuntimeLocator.ResolveRuntime(AppContext.BaseDirectory);
         var codexHome = CodexRuntimeLocator.ResolveCodexHome(localAppData);
 
+        // The pairing trust anchor. It is created on first start and reused forever after, so a
+        // paired phone keeps working across restarts and address changes.
+        _bridgeIdentity = await new WindowsCngBridgeIdentityStore(
+            Path.Combine(bridgeFolder, "identity")).GetOrCreateAsync(CancellationToken.None);
+
+        var pairedDevices = new PairedDeviceRepository(_database);
+        var deviceTokens = new DeviceTokenService(pairedDevices);
+        var pairingService = new PairingService(deviceTokens);
+
+        _pairingViewModel = new PairingViewModel(
+            pairingService,
+            _bridgeIdentity,
+            () => _endpoint is { } endpoint
+                ? PairingQrPayload.Create(
+                    endpoint.Host,
+                    endpoint.Port,
+                    pairingId: string.Empty,
+                    _bridgeIdentity.BridgeId,
+                    _bridgeIdentity.SpkiSha256)
+                : null);
+
         builder.Services.AddSingleton<IHostedService>(services =>
         {
             // Resolved here rather than before Build so the Bridge logs through the same redacting
@@ -88,6 +127,7 @@ public partial class App : System.Windows.Application
         _host = builder.Build();
 
         _window = new StatusWindow(viewModel);
+        _pairingWindow = new PairingQrWindow(_pairingViewModel);
         _tray = new TrayController(
             openStatus: () =>
             {
@@ -95,6 +135,7 @@ public partial class App : System.Windows.Application
                 _window.Activate();
             },
             refreshNow: () => _ = SafeAsync(() => RefreshNowAsync()),
+            pairDevice: () => _pairingWindow.BeginPairing(),
             login: () => _ = SafeAsync(LoginAsync),
             logout: () => _ = SafeAsync(() => LogoutAsync()),
             openLogs: OpenLogs,
@@ -179,6 +220,10 @@ public partial class App : System.Windows.Application
 
         // Await the hosted service: the child process must be gone before the dispatcher closes.
         await _host!.StopAsync().ConfigureAwait(true);
+
+        _pairingViewModel?.Dispose();
+        _pairingWindow?.AllowClose();
+        _pairingWindow?.Close();
 
         _window?.AllowClose();
         _window?.Close();

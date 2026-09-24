@@ -1,0 +1,72 @@
+<Window x:Class="CodexQuota.Desktop.Views.PairingQrWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Pair Device"
+        Height="560"
+        Width="460"
+        ResizeMode="NoResize">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   FontWeight="SemiBold"
+                   TextWrapping="Wrap"
+                   Text="Scan this code with the Codex Quota app on your phone." />
+
+        <Border Grid.Row="1"
+                Margin="0,12,0,0"
+                Padding="8"
+                HorizontalAlignment="Center"
+                BorderBrush="LightGray"
+                BorderThickness="1">
+            <!-- A null Source simply renders nothing, so no converter is needed for the
+                 "no LAN endpoint yet" state. -->
+            <Image Width="280"
+                   Height="280"
+                   Source="{Binding QrImage}" />
+        </Border>
+
+        <StackPanel Grid.Row="2" Margin="0,12,0,0">
+            <TextBlock FontWeight="SemiBold" Text="Bridge identity code" />
+            <TextBlock FontSize="20"
+                       FontFamily="Consolas"
+                       Text="{Binding BridgeVerificationCode}" />
+            <TextBlock Margin="0,4,0,0"
+                       Foreground="Gray"
+                       TextWrapping="Wrap"
+                       Text="Your phone shows this same code. If it differs, do not pair: the Bridge identity has changed." />
+        </StackPanel>
+
+        <TextBlock Grid.Row="3"
+                   Margin="0,12,0,0"
+                   TextWrapping="Wrap"
+                   Text="{Binding PendingRequestText}" />
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Width="110"
+                    Margin="0,0,8,0"
+                    Padding="8,4"
+                    Click="OnAllow"
+                    Content="Allow"
+                    IsEnabled="{Binding HasPendingRequest}" />
+            <Button Width="110"
+                    Padding="8,4"
+                    Click="OnReject"
+                    Content="Reject"
+                    IsEnabled="{Binding HasPendingRequest}" />
+        </StackPanel>
+
+        <TextBlock Grid.Row="5"
+                   Margin="0,12,0,0"
+                   Foreground="Gray"
+                   TextWrapping="Wrap"
+                   Text="Pairing is approved only here, on this PC. Closing this window does not pair anything." />
+    </Grid>
+</Window>

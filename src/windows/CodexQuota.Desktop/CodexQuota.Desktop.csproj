@@ -13,12 +13,14 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+    <PackageReference Include="QRCoder.Core" Version="2.0.2" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\CodexQuota.Core\CodexQuota.Core.csproj" />
     <ProjectReference Include="..\CodexQuota.Codex\CodexQuota.Codex.csproj" />
     <ProjectReference Include="..\CodexQuota.Storage\CodexQuota.Storage.csproj" />
+    <ProjectReference Include="..\CodexQuota.Networking\CodexQuota.Networking.csproj" />
   </ItemGroup>
 
   <ItemGroup>
