@@ -13,6 +13,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The Bridge embeds Kestrel inside the desktop process rather than shipping a separate service. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       The Bridge identity's private key lives in the current Windows user's CNG key store. The CNG
       types are Windows-only and are not part of the portable net8.0 ref pack, so the package is
