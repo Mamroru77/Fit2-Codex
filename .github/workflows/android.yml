@@ -6,9 +6,15 @@ name: Android
 # and `android-actions/setup-android@v3` is deliberately not used, because it tries to install the
 # `tools` package, which no longer exists in the SDK repository and makes it fail.
 #
-# While `src/android` does not exist the workflow only proves the toolchain is reachable and usable,
-# which is the evidence the Android stages depend on. Once the project exists it becomes the real
-# gate: testDebugUnitTest, lintDebug and assembleDebug.
+# Two jobs, because they fail for different reasons and a reader needs to know which:
+#
+#   verify        - compiles everything, runs the JVM tests, lints, and assembles the APK.
+#   instrumentation - boots a real emulator and runs connectedDebugAndroidTest. It is the only place
+#                     the runtime gates run, and it is kept separate so a broken emulator image never
+#                     makes the build look broken.
+#
+# Both use official SDK tooling — sdkmanager, avdmanager, emulator, adb — rather than a third-party
+# emulator action, so the emulator is exactly the one the SDK ships and there is nothing to pin.
 
 on:
   workflow_dispatch:
@@ -50,18 +56,6 @@ jobs:
           echo "dl.google.com/android/repository -> HTTP $code"
           test "$code" = "200"
 
-      - name: Probe Google Maven
-        run: |
-          for url in \
-            "https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/8.5.2/gradle-8.5.2.pom" \
-            "https://dl.google.com/dl/android/maven2/androidx/core/core-ktx/1.13.1/core-ktx-1.13.1.pom" \
-            "https://dl.google.com/dl/android/maven2/androidx/work/work-runtime-ktx/2.9.1/work-runtime-ktx-2.9.1.pom"
-          do
-            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 "$url" || echo "000")
-            echo "$url -> HTTP $code"
-            test "$code" = "200"
-          done
-
       - name: Put the SDK command-line tools on PATH
         run: |
           # The runner has the SDK, but sdkmanager is not on PATH. Resolve it rather than hard-coding a
@@ -99,28 +93,6 @@ jobs:
           sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
           sdkmanager --list_installed | grep -E 'platforms;android-37|build-tools;37.0.0'
 
-      - name: Report the available toolchain versions
-        run: |
-          # Facts, not guesses: the exact AGP, Compose BOM and Kotlin versions this runner can
-          # resolve, and which Android platforms the SDK repository offers.
-          echo "=== AGP (Google Maven) ==="
-          curl -sS --max-time 60 "https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/maven-metadata.xml" \
-            | grep -oE '<version>[^<]+</version>' | tail -25
-
-          echo "=== Compose BOM (Google Maven) ==="
-          curl -sS --max-time 60 "https://dl.google.com/dl/android/maven2/androidx/compose/compose-bom/maven-metadata.xml" \
-            | grep -oE '<version>[^<]+</version>' | tail -15
-
-          echo "=== Kotlin (Maven Central) ==="
-          curl -sS --max-time 60 "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-gradle-plugin/maven-metadata.xml" \
-            | grep -oE '<version>[^<]+</version>' | tail -12
-
-          echo "=== Android platforms available ==="
-          sdkmanager --list 2>/dev/null | grep -E '^\s+platforms;android-3' | tail -12
-
-          echo "=== Build tools available ==="
-          sdkmanager --list 2>/dev/null | grep -E '^\s+build-tools;3' | tail -12
-
       - name: Note whether the Android project exists yet
         id: project
         run: |
@@ -131,14 +103,18 @@ jobs:
             echo "src/android does not exist yet; the toolchain check above is the whole gate for now."
           fi
 
-      - name: Unit tests, lint and assemble
+      - name: Unit tests, lint, assemble, and compile the instrumentation tests
         if: steps.project.outputs.exists == 'true'
         working-directory: src/android
         run: |
           chmod +x ./gradlew
-          ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
 
-      - name: Publish the test and lint reports
+          # assembleDebugAndroidTest is here as well as in the emulator job: compiling the
+          # instrumentation sources is cheap, and a compile error in them should not have to wait for
+          # an emulator boot to be discovered.
+          ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
+
+      - name: Publish the build, test and lint reports
         if: always() && steps.project.outputs.exists == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -156,11 +132,167 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Android"
-            echo
-            echo "Toolchain reachable and usable on a GitHub-hosted runner."
+            echo "## Android build"
             echo
             echo "| Item | Value |"
             echo "|---|---|"
             echo "| src/android present | ${{ steps.project.outputs.exists }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  instrumentation:
+    name: Android runtime gates on an emulator
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Gradle with dependency caching
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Put the SDK tools on PATH
+        run: |
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager_path="$(find "$sdk" -maxdepth 5 -name sdkmanager 2>/dev/null | head -1)"
+          tools_dir="$(dirname "$sdkmanager_path")"
+
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+          echo "$sdk/platform-tools" >> "$GITHUB_PATH"
+          echo "$sdk/emulator" >> "$GITHUB_PATH"
+
+      - name: Enable hardware acceleration
+        run: |
+          # The hosted Linux runners expose KVM; the emulator is unusable without it.
+          if [ ! -e /dev/kvm ]; then
+            echo "::error::/dev/kvm is missing, so no emulator can run here."
+            exit 1
+          fi
+
+          sudo chmod 666 /dev/kvm
+          ls -la /dev/kvm
+
+      - name: Install the newest usable system image
+        id: image
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platform-tools" "emulator" "platforms;android-37.0" "build-tools;37.0.0"
+
+          # API 37 is preferred, but only if the runner's SDK repository actually offers an image for
+          # it. The selection is made from `sdkmanager --list` rather than assumed, and the chosen
+          # API is printed and recorded, so nothing here claims a version that was not used.
+          image="$(sdkmanager --list 2>/dev/null \
+            | grep -oE 'system-images;android-[0-9]+;google_apis;x86_64' \
+            | sort -u \
+            | awk -F';' '{ split($2, a, "-"); if (a[2] + 0 <= 37) print (a[2] + 0) "\t" $0 }' \
+            | sort -n -k1,1 \
+            | tail -1 \
+            | cut -f2)"
+
+          if [ -z "$image" ]; then
+            echo "::error::No x86_64 Google APIs system image at or below API 37 is available."
+            echo "Available system images:"
+            sdkmanager --list 2>/dev/null | grep -oE 'system-images;[^ |]+' | sort -u || true
+            exit 1
+          fi
+
+          api="$(echo "$image" | cut -d';' -f2 | sed 's/android-//')"
+
+          echo "Using system image: $image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "api=$api" >> "$GITHUB_OUTPUT"
+          echo "EMULATOR_API=$api" >> "$GITHUB_ENV"
+
+          echo "no" | sdkmanager "$image"
+          echo "no" | avdmanager create avd --name cqb --package "$image" --device pixel_6 --force
+
+          avdmanager list avd
+
+      - name: Boot the emulator
+        run: |
+          # `swiftshader_indirect` is software rendering, which is what a headless runner can do.
+          # `-no-snapshot` makes every run a cold boot, so the result does not depend on a saved state.
+          "$ANDROID_HOME/emulator/emulator" \
+            -avd cqb \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -gpu swiftshader_indirect \
+            -accel on \
+            > "$RUNNER_TEMP/emulator.log" 2>&1 &
+
+          adb wait-for-device
+
+          echo "Waiting for sys.boot_completed..."
+          deadline=$(( SECONDS + 600 ))
+
+          until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::The emulator did not finish booting within 600s."
+              tail -100 "$RUNNER_TEMP/emulator.log" || true
+              exit 1
+            fi
+
+            sleep 5
+          done
+
+          # Give the package manager a moment after boot_completed, which is what the first install
+          # actually waits on.
+          adb shell 'while [ "$(getprop init.svc.bootanim)" != "stopped" ]; do sleep 1; done' || true
+          sleep 10
+
+          adb shell input keyevent 82 || true
+          adb devices
+          adb shell getprop ro.build.version.sdk
+
+      - name: Disable animations
+        run: |
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+
+      - name: Run the instrumentation tests
+        working-directory: src/android
+        run: |
+          chmod +x ./gradlew
+
+          # The complete Stage C and Stage D gate, in one place, on a real Android runtime.
+          ./gradlew --no-daemon \
+            testDebugUnitTest \
+            lintDebug \
+            connectedDebugAndroidTest \
+            assembleDebug
+
+      - name: Publish the instrumentation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-instrumentation-reports
+          if-no-files-found: ignore
+          path: |
+            src/android/app/build/outputs/androidTest-results/**
+            src/android/app/build/reports/androidTests/**
+            src/android/app/build/reports/lint-results-debug.*
+            src/android/app/build/test-results/**
+            src/android/app/build/outputs/apk/**
+
+      - name: Stop the emulator
+        if: always()
+        run: |
+          adb emu kill || true
+          pkill -f qemu-system || true
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "## Android runtime gates"
+            echo
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| System image | ${{ steps.image.outputs.image }} |"
+            echo "| Emulator API | ${{ steps.image.outputs.api }} |"
           } >> "$GITHUB_STEP_SUMMARY"
