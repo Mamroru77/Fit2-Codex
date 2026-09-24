@@ -125,7 +125,7 @@ class StageDRuntimeIntegrationTest {
         withForegroundApp {
             controller(NotificationPreferences(statusNotificationEnabled = true, alertsEnabled = false)).applyMode(SyncMode.Live)
 
-            assertTrue(LiveBridgeService.isRunning, "LIVE must run the foreground service")
+            awaitServiceRunning(expected = true)
         }
 
         assertTrue(
@@ -139,7 +139,7 @@ class StageDRuntimeIntegrationTest {
         withForegroundApp {
             controller(NotificationPreferences(statusNotificationEnabled = true, alertsEnabled = true)).applyMode(SyncMode.Live)
 
-            assertTrue(LiveBridgeService.isRunning, "LIVE must run the foreground service")
+            awaitServiceRunning(expected = true)
         }
 
         assertTrue(
@@ -152,12 +152,12 @@ class StageDRuntimeIntegrationTest {
     fun switchingFromLiveToBackgroundStopsTheServiceBeforeScheduling() = runBlocking {
         withForegroundApp {
             controller(NotificationPreferences(statusNotificationEnabled = true)).applyMode(SyncMode.Live)
-            assertTrue(LiveBridgeService.isRunning)
+            awaitServiceRunning(expected = true)
         }
 
         controller(NotificationPreferences(alertsEnabled = true)).applyMode(SyncMode.Background)
 
-        assertFalse(LiveBridgeService.isRunning, "the service must stop when the worker takes over")
+        awaitServiceRunning(expected = false)
         assertTrue(uniqueWork().any { it.state == WorkInfo.State.ENQUEUED })
     }
 
@@ -165,12 +165,12 @@ class StageDRuntimeIntegrationTest {
     fun anExplicitStopLeavesTheServiceStoppedAndItDoesNotRestartItself() = runBlocking {
         withForegroundApp {
             controller(NotificationPreferences(statusNotificationEnabled = true)).applyMode(SyncMode.Live)
-            assertTrue(LiveBridgeService.isRunning)
+            awaitServiceRunning(expected = true)
         }
 
         context.stopService(Intent(context, LiveBridgeService::class.java))
 
-        assertFalse(LiveBridgeService.isRunning, "an explicit stop must stop the service")
+        awaitServiceRunning(expected = false)
 
         // Nothing may bring it back on its own: not a boot receiver, not a restart loop, not a
         // sticky restart. The user resumes it.
@@ -401,6 +401,32 @@ class StageDRuntimeIntegrationTest {
         }
 
     /**
+     * Waits for the live service to be running, or to be stopped.
+     *
+     * `startForegroundService` and `stopService` are both asynchronous: the flag is set by the
+     * service's own `onCreate`/`onDestroy`, which happen on the main thread after the call returns.
+     * Asserting immediately was reading the flag before the service had been created, which is why
+     * four tests reported "LIVE must run the foreground service" while logcat was recording
+     * `Background started FGS: Allowed` for this very package.
+     */
+    private fun awaitServiceRunning(expected: Boolean, timeoutMillis: Long = SERVICE_TIMEOUT_MILLIS) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+
+        while (System.currentTimeMillis() < deadline) {
+            if (LiveBridgeService.isRunning == expected) {
+                return
+            }
+
+            Thread.sleep(SERVICE_POLL_MILLIS)
+        }
+
+        throw AssertionError(
+            "the live service did not become ${if (expected) "running" else "stopped"} within " +
+                "${timeoutMillis}ms",
+        )
+    }
+
+    /**
      * Runs [body] with the app in the foreground.
      *
      * Android only permits an app to start a foreground service while it is visible, so the service
@@ -514,5 +540,7 @@ class StageDRuntimeIntegrationTest {
 
     private companion object {
         const val SETTLE_MILLIS = 1_000L
+        const val SERVICE_TIMEOUT_MILLIS = 5_000L
+        const val SERVICE_POLL_MILLIS = 50L
     }
 }

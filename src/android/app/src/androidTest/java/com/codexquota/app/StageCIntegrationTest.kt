@@ -32,9 +32,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import kotlinx.coroutines.flow.first
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 
 /**
  * The Stage C runtime gate.
@@ -219,29 +220,62 @@ class StageCIntegrationTest {
         // 7. The live path: a real WebSocket upgrade, and one real frame.
         val socket = OkHttpBridgeWebSocket.create(pairedBridge, secretBox.open(sealed)).connect(endpoint)
 
+        // The event flow is collected ONCE, into a list, and the test waits on the list.
+        //
+        // Collecting it twice was wrong. `events()` opens a new WebSocket each time it is collected,
+        // and completing the flow closes the socket that collection owned — so the second collection
+        // dialled a second connection while the pushed frame went to the first one, and the test
+        // timed out with nothing to show for it.
+        val received = CopyOnWriteArrayList<BridgeWebSocketEvent>()
+        val collector = launch { socket.events().collect { received += it } }
+
         try {
-            val hello = withTimeout(TIMEOUT_MILLIS) {
-                socket.events().first { it is BridgeWebSocketEvent.Hello }
-            }
+            val hello = awaitEvent(received, "a hello") { it is BridgeWebSocketEvent.Hello }
 
             assertIs<BridgeWebSocketEvent.Hello>(hello)
             assertTrue(bridge.hasLiveConnection, "the app did not hold an upgraded connection")
 
             bridge.pushQuotaFrame(sequence = 1, shortRemainingPercent = 8.0)
 
-            val update = withTimeout(TIMEOUT_MILLIS) {
-                socket.events().first { it is BridgeWebSocketEvent.QuotaUpdated }
-            }
-
-            val frame = assertIs<BridgeWebSocketEvent.QuotaUpdated>(update)
+            val frame = assertIs<BridgeWebSocketEvent.QuotaUpdated>(
+                awaitEvent(received, "the pushed frame") { it is BridgeWebSocketEvent.QuotaUpdated },
+            )
 
             assertEquals(1L, frame.sequence)
             assertEquals(8.0, frame.snapshot.shortWindow.remainingPercent)
             // Used and remaining are complements in the v1 contract; the frame is internally sound.
             assertEquals(92.0, frame.snapshot.shortWindow.usedPercent)
         } finally {
+            collector.cancel()
             socket.close()
         }
+    }
+
+    /**
+     * Waits for an event, and names what did arrive when none does.
+     *
+     * A bare timeout says nothing about where the live path stopped; the list and the paths the
+     * server saw say whether the upgrade happened at all.
+     */
+    private suspend fun awaitEvent(
+        received: List<BridgeWebSocketEvent>,
+        description: String,
+        timeoutMillis: Long = TIMEOUT_MILLIS,
+        predicate: (BridgeWebSocketEvent) -> Boolean,
+    ): BridgeWebSocketEvent {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+
+        while (System.currentTimeMillis() < deadline) {
+            received.firstOrNull(predicate)?.let { return it }
+
+            delay(POLL_MILLIS)
+        }
+
+        throw AssertionError(
+            description + " never arrived within " + timeoutMillis + "ms. Events received: " +
+                received + ". Paths the server saw: " + bridge.paths() +
+                " - an upgrade request is /api/v1/ws.",
+        )
     }
 
     @Test
@@ -425,5 +459,6 @@ class StageCIntegrationTest {
 
     private companion object {
         const val TIMEOUT_MILLIS = 15_000L
+        const val POLL_MILLIS = 50L
     }
 }

@@ -98,9 +98,17 @@ class NotificationPermissionTest {
 
         val health = AndroidNotificationHealthChecker(context).read()
 
-        assertTrue(health.permissionGranted)
-        assertTrue(health.canDeliver(NotificationChannels.STATUS))
-        assertTrue(health.canDeliver(NotificationChannels.ALERTS))
+        assertTrue(health.permissionGranted, "delivery permission was not reported as granted")
+        assertTrue(
+            health.statusChannelEnabled,
+            "the status channel was reported as blocked; importance is " +
+                manager.getNotificationChannel(NotificationChannels.STATUS)?.importance,
+        )
+        assertTrue(
+            health.alertsChannelEnabled,
+            "the alerts channel was reported as blocked; importance is " +
+                manager.getNotificationChannel(NotificationChannels.ALERTS)?.importance,
+        )
     }
 
     // --- the real channel importance ------------------------------------------------------------
