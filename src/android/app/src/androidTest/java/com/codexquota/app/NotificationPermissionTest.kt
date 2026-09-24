@@ -67,7 +67,7 @@ class NotificationPermissionTest {
         context = ApplicationProvider.getApplicationContext()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-        NotificationChannels.ensureCreated(context)
+        resetChannels()
 
         // Every test starts from "the system will deliver", so an allowed-state test is not at the
         // mercy of the emulator's default and a denied-state test is a change rather than a
@@ -75,14 +75,43 @@ class NotificationPermissionTest {
         setDeliveryEnabled(enabled = true)
     }
 
+    /**
+     * Puts both channels back at their normal importance.
+     *
+     * One test in this class creates the alerts channel at `IMPORTANCE_NONE` to prove the app
+     * notices a blocked channel, and the platform keeps whatever importance a channel was last
+     * created with. Relying on the previous test's teardown to undo that is not enough — a
+     * file-backed ordering dependency is exactly what left this class failing on
+     * "the alerts channel was reported as blocked; importance is 0".
+     *
+     * Deleting and recreating is the only way to reset an importance, and the delete is handled
+     * asynchronously by the notification service, so recreating immediately can lose the race and
+     * leave no channel at all. The settle is short and the result is asserted rather than assumed.
+     */
+    private fun resetChannels() {
+        manager.deleteNotificationChannel(NotificationChannels.ALERTS)
+        manager.deleteNotificationChannel(NotificationChannels.STATUS)
+
+        Thread.sleep(CHANNEL_SETTLE_MILLIS)
+
+        NotificationChannels.ensureCreated(context)
+
+        assertEquals(
+            NotificationManager.IMPORTANCE_DEFAULT,
+            manager.getNotificationChannel(NotificationChannels.ALERTS)?.importance,
+            "the alerts channel could not be reset to its normal importance",
+        )
+        assertEquals(
+            NotificationManager.IMPORTANCE_LOW,
+            manager.getNotificationChannel(NotificationChannels.STATUS)?.importance,
+            "the status channel could not be reset to its normal importance",
+        )
+    }
+
     @AfterTest
     fun tearDown() {
         // Restore the real state, so a later test never inherits this one's permission change.
         setDeliveryEnabled(enabled = true)
-
-        manager.deleteNotificationChannel(NotificationChannels.ALERTS)
-        manager.deleteNotificationChannel(NotificationChannels.STATUS)
-        NotificationChannels.ensureCreated(context)
 
         cancelNotifications()
         scope.cancel()
@@ -379,5 +408,6 @@ class NotificationPermissionTest {
     private companion object {
         const val TIMEOUT_MILLIS = 10_000L
         const val POLL_MILLIS = 50L
+        const val CHANNEL_SETTLE_MILLIS = 250L
     }
 }
