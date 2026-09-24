@@ -1,0 +1,108 @@
+name: Android
+
+# The Android verification gate. The development machine cannot reach dl.google.com or
+# maven.google.com, so a GitHub-hosted runner is the environment where Stage C and Stage D are built
+# and verified. The runner already has the Android SDK preinstalled, so no setup action is needed —
+# and `android-actions/setup-android@v3` is deliberately not used, because it tries to install the
+# `tools` package, which no longer exists in the SDK repository and makes it fail.
+#
+# While `src/android` does not exist the workflow only proves the toolchain is reachable and usable,
+# which is the evidence the Android stages depend on. Once the project exists it becomes the real
+# gate: testDebugUnitTest, lintDebug and assembleDebug.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/android.yml'
+      - 'src/android/**'
+  pull_request:
+    paths:
+      - 'src/android/**'
+
+jobs:
+  verify:
+    name: Android toolchain and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the toolchain versions
+        run: |
+          java -version
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_HOME=${ANDROID_HOME:-unset}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
+
+      - name: Probe the Android SDK repository
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 \
+            "https://dl.google.com/android/repository/repository2-3.xml" || echo "000")
+          echo "dl.google.com/android/repository -> HTTP $code"
+          test "$code" = "200"
+
+      - name: Probe Google Maven
+        run: |
+          for url in \
+            "https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/8.5.2/gradle-8.5.2.pom" \
+            "https://dl.google.com/dl/android/maven2/androidx/core/core-ktx/1.13.1/core-ktx-1.13.1.pom" \
+            "https://dl.google.com/dl/android/maven2/androidx/work/work-runtime-ktx/2.9.1/work-runtime-ktx-2.9.1.pom"
+          do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 "$url" || echo "000")
+            echo "$url -> HTTP $code"
+            test "$code" = "200"
+          done
+
+      - name: Confirm the preinstalled SDK is usable
+        run: |
+          sdkmanager --version
+          sdkmanager --list_installed | head -40
+
+      - name: Accept the SDK licences and install the build platform
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager --list_installed | grep -E 'platforms;android-35|build-tools;35.0.0'
+
+      - name: Note whether the Android project exists yet
+        id: project
+        run: |
+          if [ -f src/android/settings.gradle.kts ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "src/android does not exist yet; the toolchain check above is the whole gate for now."
+          fi
+
+      - name: Unit tests, lint and assemble
+        if: steps.project.outputs.exists == 'true'
+        working-directory: src/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
+
+      - name: Publish the test and lint reports
+        if: always() && steps.project.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports
+          if-no-files-found: ignore
+          path: |
+            src/android/app/build/reports/**
+            src/android/app/build/outputs/apk/**
+
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo "## Android"
+            echo
+            echo "Toolchain reachable and usable on a GitHub-hosted runner."
+            echo
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| src/android present | ${{ steps.project.outputs.exists }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
