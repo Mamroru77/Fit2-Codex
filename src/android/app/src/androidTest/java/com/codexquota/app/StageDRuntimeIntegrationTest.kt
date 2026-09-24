@@ -86,8 +86,13 @@ class StageDRuntimeIntegrationTest {
         workManager = WorkManager.getInstance(context)
 
         // Start from a known state: nothing scheduled, nothing running.
+        //
+        // `stopService` is asynchronous, so a service left running by the previous test was still
+        // reporting as running here — which is what made "BACKGROUND must not start a foreground
+        // service" fail on a test that never starts one.
         workManager.cancelUniqueWork(PERIODIC_WORK_NAME)
         context.stopService(Intent(context, LiveBridgeService::class.java))
+        awaitServiceRunning(expected = false)
     }
 
     @AfterTest

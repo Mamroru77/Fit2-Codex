@@ -92,7 +92,11 @@ class NotificationPermissionTest {
         manager.deleteNotificationChannel(NotificationChannels.ALERTS)
         manager.deleteNotificationChannel(NotificationChannels.STATUS)
 
-        Thread.sleep(CHANNEL_SETTLE_MILLIS)
+        // The delete is handled asynchronously by the notification service. Waiting a fixed amount
+        // was not enough — the recreate lost the race and the channel came back at the importance it
+        // had been deleted with — so this waits for the deletion to be observable instead.
+        awaitChannelAbsent(NotificationChannels.ALERTS)
+        awaitChannelAbsent(NotificationChannels.STATUS)
 
         NotificationChannels.ensureCreated(context)
 
@@ -292,6 +296,24 @@ class NotificationPermissionTest {
      * [NotificationDeliveryDisabledTest]'s own workflow step. This class only ever needs the
      * opposite, so that is all it does.
      */
+    /** Waits until the platform reports the channel as gone. */
+    private fun awaitChannelAbsent(channelId: String, timeoutMillis: Long = CHANNEL_TIMEOUT_MILLIS) {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+
+        while (System.currentTimeMillis() < deadline) {
+            if (manager.getNotificationChannel(channelId) == null) {
+                return
+            }
+
+            Thread.sleep(POLL_MILLIS)
+        }
+
+        throw AssertionError(
+            "channel " + channelId + " was still present " + timeoutMillis +
+                "ms after it was deleted, so it cannot be recreated at its normal importance",
+        )
+    }
+
     private fun setDeliveryEnabled(enabled: Boolean) {
         val packageName = context.packageName
         val permission = "android.permission.POST_NOTIFICATIONS"
@@ -408,6 +430,6 @@ class NotificationPermissionTest {
     private companion object {
         const val TIMEOUT_MILLIS = 10_000L
         const val POLL_MILLIS = 50L
-        const val CHANNEL_SETTLE_MILLIS = 250L
+        const val CHANNEL_TIMEOUT_MILLIS = 5_000L
     }
 }
