@@ -41,4 +41,13 @@ public static class ApiErrorCodes
     /// malformed document is reported rather than silently defaulted.
     /// </summary>
     public const string DataProtocolError = "DATA_PROTOCOL_ERROR";
+
+    /// <summary>A request parameter was missing, malformed or out of bounds.</summary>
+    public const string InvalidRequest = "INVALID_REQUEST";
+
+    /// <summary>
+    /// History could not be read. Current quota is unaffected: history is a secondary concern, so
+    /// losing it must never take the live snapshot down with it.
+    /// </summary>
+    public const string HistoryUnavailable = "HISTORY_UNAVAILABLE";
 }

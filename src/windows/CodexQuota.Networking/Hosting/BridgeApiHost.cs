@@ -62,6 +62,10 @@ public sealed class BridgeApiHost : IAsyncDisposable
                 options.Port,
                 listen => listen.UseHttps(leafCertificate)));
 
+        // The endpoint options are part of the API surface, not of the transport: /info and the
+        // WebSocket hello both report the versions they carry.
+        builder.Services.AddSingleton(options);
+
         configureServices(builder.Services);
 
         var application = builder.Build();
