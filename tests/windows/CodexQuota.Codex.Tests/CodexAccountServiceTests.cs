@@ -18,10 +18,12 @@ public class CodexAccountServiceTests
         var service = new CodexAccountService(client);
         using var timeout = new CancellationTokenSource(TestTimeout);
 
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
+
         var login = service.StartChatGptLoginAsync(timeout.Token);
 
-        await transport.WaitForWritesAsync(1, timeout.Token);
-        var request = Parse(transport.WrittenLines[0]);
+        await transport.WaitForWritesAsync(3, timeout.Token);
+        var request = Parse(transport.WrittenLines[2]);
 
         Assert.Equal("account/login/start", request.GetProperty("method").GetString());
 
@@ -30,7 +32,7 @@ public class CodexAccountServiceTests
             request.GetProperty("params"),
             """{"type":"chatgpt","useHostedLoginSuccessPage":true,"appBrand":"chatgpt"}""");
 
-        transport.EnqueueLine("""{"id":1,"result":{"authUrl":"https://auth.openai.com/authorize?session=abc"}}""");
+        transport.EnqueueLine("""{"id":2,"result":{"authUrl":"https://auth.openai.com/authorize?session=abc"}}""");
 
         var authUrl = await login;
 
@@ -45,10 +47,12 @@ public class CodexAccountServiceTests
         var service = new CodexAccountService(client);
         using var timeout = new CancellationTokenSource(TestTimeout);
 
-        var login = service.StartChatGptLoginAsync(timeout.Token);
-        await transport.WaitForWritesAsync(1, timeout.Token);
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
 
-        transport.EnqueueLine("""{"id":1,"result":{}}""");
+        var login = service.StartChatGptLoginAsync(timeout.Token);
+        await transport.WaitForWritesAsync(3, timeout.Token);
+
+        transport.EnqueueLine("""{"id":2,"result":{}}""");
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () => await login);
     }
@@ -61,10 +65,12 @@ public class CodexAccountServiceTests
         var service = new CodexAccountService(client);
         using var timeout = new CancellationTokenSource(TestTimeout);
 
-        var login = service.StartChatGptLoginAsync(timeout.Token);
-        await transport.WaitForWritesAsync(1, timeout.Token);
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
 
-        transport.EnqueueLine("""{"id":1,"result":{"authUrl":"not-a-url"}}""");
+        var login = service.StartChatGptLoginAsync(timeout.Token);
+        await transport.WaitForWritesAsync(3, timeout.Token);
+
+        transport.EnqueueLine("""{"id":2,"result":{"authUrl":"not-a-url"}}""");
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () => await login);
     }
@@ -77,12 +83,14 @@ public class CodexAccountServiceTests
         var service = new CodexAccountService(client);
         using var timeout = new CancellationTokenSource(TestTimeout);
 
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
+
         var read = service.ReadAccountAsync(timeout.Token);
-        await transport.WaitForWritesAsync(1, timeout.Token);
+        await transport.WaitForWritesAsync(3, timeout.Token);
 
-        Assert.Equal("account/read", Parse(transport.WrittenLines[0]).GetProperty("method").GetString());
+        Assert.Equal("account/read", Parse(transport.WrittenLines[2]).GetProperty("method").GetString());
 
-        transport.EnqueueLine("""{"id":1,"result":{}}""");
+        transport.EnqueueLine("""{"id":2,"result":{}}""");
 
         var account = await read;
 
@@ -99,11 +107,13 @@ public class CodexAccountServiceTests
         var service = new CodexAccountService(client);
         using var timeout = new CancellationTokenSource(TestTimeout);
 
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
+
         var read = service.ReadAccountAsync(timeout.Token);
-        await transport.WaitForWritesAsync(1, timeout.Token);
+        await transport.WaitForWritesAsync(3, timeout.Token);
 
         transport.EnqueueLine(
-            """{"id":1,"result":{"authMode":"chatgpt","account":{"email":"dev@example.com"}}}""");
+            """{"id":2,"result":{"authMode":"chatgpt","account":{"email":"dev@example.com"}}}""");
 
         var account = await read;
 
@@ -120,14 +130,33 @@ public class CodexAccountServiceTests
         var service = new CodexAccountService(client);
         using var timeout = new CancellationTokenSource(TestTimeout);
 
+        await CompleteHandshakeAsync(client, transport, timeout.Token);
+
         var logout = service.LogoutAsync(timeout.Token);
 
-        await transport.WaitForWritesAsync(1, timeout.Token);
-        Assert.Equal("account/logout", Parse(transport.WrittenLines[0]).GetProperty("method").GetString());
+        await transport.WaitForWritesAsync(3, timeout.Token);
+        Assert.Equal("account/logout", Parse(transport.WrittenLines[2]).GetProperty("method").GetString());
 
-        transport.EnqueueLine("""{"id":1,"result":{}}""");
+        transport.EnqueueLine("""{"id":2,"result":{}}""");
 
         await logout;
+    }
+
+    /// <summary>
+    /// Completes the documented handshake: the account service may only be used after the App
+    /// Server initialization has finished.
+    /// </summary>
+    private static async Task CompleteHandshakeAsync(
+        CodexRpcClient client,
+        FakeJsonRpcTransport transport,
+        CancellationToken cancellationToken)
+    {
+        var initialize = client.InitializeAsync(cancellationToken);
+
+        await transport.WaitForWritesAsync(1, cancellationToken);
+        transport.EnqueueLine("""{"id":1,"result":{}}""");
+
+        await initialize;
     }
 
     /// <summary>
