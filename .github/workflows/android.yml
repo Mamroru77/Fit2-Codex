@@ -157,8 +157,17 @@ jobs:
           sdkmanager_path="$(find "$sdk" -maxdepth 5 -name sdkmanager 2>/dev/null | head -1)"
           tools_dir="$(dirname "$sdkmanager_path")"
 
+          # `avdmanager` honours ANDROID_USER_HOME and XDG_CONFIG_HOME, and on this runner that put
+          # the AVD under $HOME/.config/.android/avd — while the emulator only looks in
+          # $ANDROID_AVD_HOME and $HOME/.android/avd. Pinning both to one directory is what stops
+          # them disagreeing, which is exactly how the first attempt failed with "Unknown AVD name".
+          avd_home="$HOME/.android/avd"
+          mkdir -p "$avd_home"
+
           echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_AVD_HOME=$avd_home" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$HOME/.android" >> "$GITHUB_ENV"
           echo "$tools_dir" >> "$GITHUB_PATH"
           echo "$sdk/platform-tools" >> "$GITHUB_PATH"
           echo "$sdk/emulator" >> "$GITHUB_PATH"
@@ -215,6 +224,11 @@ jobs:
           # Facts before the attempt, so a failure below is diagnosable rather than mysterious.
           "$ANDROID_HOME/emulator/emulator" -accel-check || true
           avdmanager list avd || true
+
+          # The emulator's own view, which is the one that matters: it resolves the AVD directory
+          # differently from avdmanager.
+          "$ANDROID_HOME/emulator/emulator" -list-avds
+
           adb start-server
           adb version
 
