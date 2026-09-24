@@ -68,6 +68,8 @@ class SettingsViewModelTest {
 
     private class FixedHealth(private val health: NotificationHealth) : NotificationHealthChecker {
         override fun read(): NotificationHealth = health
+
+        override fun isChannelEnabled(channelId: String): Boolean = health.canDeliver(channelId)
     }
 
     /**

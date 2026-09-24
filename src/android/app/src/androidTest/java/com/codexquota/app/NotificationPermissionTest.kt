@@ -67,7 +67,7 @@ class NotificationPermissionTest {
         context = ApplicationProvider.getApplicationContext()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-        resetChannels()
+        ensureAppChannels()
 
         // Every test starts from "the system will deliver", so an allowed-state test is not at the
         // mercy of the emulator's default and a denied-state test is a change rather than a
@@ -76,39 +76,30 @@ class NotificationPermissionTest {
     }
 
     /**
-     * Puts both channels back at their normal importance.
+     * Makes sure the app's two channels exist at their normal importance.
      *
-     * One test in this class creates the alerts channel at `IMPORTANCE_NONE` to prove the app
-     * notices a blocked channel, and the platform keeps whatever importance a channel was last
-     * created with. Relying on the previous test's teardown to undo that is not enough — a
-     * file-backed ordering dependency is exactly what left this class failing on
-     * "the alerts channel was reported as blocked; importance is 0".
+     * This class deliberately never lowers them. An earlier version recreated the alerts channel at
+     * `IMPORTANCE_NONE` to prove the app notices a blocked channel, and then could not put it back:
+     * Android does not let an app raise a channel's importance again, and deleting and recreating it
+     * did not escape that either — the recreate came back at `IMPORTANCE_NONE`, which left three
+     * tests failing on "the alerts channel could not be reset to its normal importance".
      *
-     * Deleting and recreating is the only way to reset an importance, and the delete is handled
-     * asynchronously by the notification service, so recreating immediately can lose the race and
-     * leave no channel at all. The settle is short and the result is asserted rather than assumed.
+     * The blocked-channel case is now checked on a channel this class owns. The property under test
+     * is unchanged — real platform channel state, read through the app's own checker — and the app's
+     * channels are never touched.
      */
-    private fun resetChannels() {
-        manager.deleteNotificationChannel(NotificationChannels.ALERTS)
-        manager.deleteNotificationChannel(NotificationChannels.STATUS)
-
-        // The delete is handled asynchronously by the notification service. Waiting a fixed amount
-        // was not enough — the recreate lost the race and the channel came back at the importance it
-        // had been deleted with — so this waits for the deletion to be observable instead.
-        awaitChannelAbsent(NotificationChannels.ALERTS)
-        awaitChannelAbsent(NotificationChannels.STATUS)
-
+    private fun ensureAppChannels() {
         NotificationChannels.ensureCreated(context)
 
         assertEquals(
-            NotificationManager.IMPORTANCE_DEFAULT,
-            manager.getNotificationChannel(NotificationChannels.ALERTS)?.importance,
-            "the alerts channel could not be reset to its normal importance",
-        )
-        assertEquals(
             NotificationManager.IMPORTANCE_LOW,
             manager.getNotificationChannel(NotificationChannels.STATUS)?.importance,
-            "the status channel could not be reset to its normal importance",
+            "the status channel is not at its normal importance",
+        )
+        assertEquals(
+            NotificationManager.IMPORTANCE_DEFAULT,
+            manager.getNotificationChannel(NotificationChannels.ALERTS)?.importance,
+            "the alerts channel is not at its normal importance",
         )
     }
 
@@ -148,38 +139,38 @@ class NotificationPermissionTest {
 
     @Test
     fun aChannelTheSystemHasBlockedIsReportedAsNotDeliverable() {
-        // Recreate the alerts channel at IMPORTANCE_NONE, which is what the platform stores when a
-        // user blocks it. Recreating is the only way a test can reach that state.
-        manager.deleteNotificationChannel(NotificationChannels.ALERTS)
+        // A channel of this class's own, at IMPORTANCE_NONE, which is what the platform stores when
+        // a channel is blocked. It is deliberately not one of the app's: an app cannot raise a
+        // channel's importance again, so using the app's would leave it blocked for every later test
+        // in this process — and for the app.
         manager.createNotificationChannel(
-            NotificationChannel(
-                NotificationChannels.ALERTS,
-                "Quota alerts",
-                NotificationManager.IMPORTANCE_NONE,
-            ),
+            NotificationChannel(BLOCKED_TEST_CHANNEL, "Blocked test channel", NotificationManager.IMPORTANCE_NONE),
         )
 
-        val health = AndroidNotificationHealthChecker(context).read()
+        val checker = AndroidNotificationHealthChecker(context)
 
-        assertFalse(health.alertsChannelEnabled, "a blocked channel must be observed as blocked")
-        assertFalse(health.canDeliver(NotificationChannels.ALERTS))
+        assertFalse(
+            checker.isChannelEnabled(BLOCKED_TEST_CHANNEL),
+            "a blocked channel must be observed as blocked",
+        )
+
+        // And the app's own channels are unaffected by it.
         assertTrue(
-            health.canDeliver(NotificationChannels.STATUS),
-            "one blocked channel must not condemn the other",
+            checker.isChannelEnabled(NotificationChannels.STATUS),
+            "one blocked channel must not condemn another",
         )
+        assertTrue(checker.isChannelEnabled(NotificationChannels.ALERTS))
     }
 
     @Test
     fun aChannelThatDoesNotExistYetIsNotTreatedAsBlocked() {
         // The channels are created on first use, so a fresh install has none. Reporting that as
         // blocked would be a false alarm about a problem that does not exist.
-        manager.deleteNotificationChannel(NotificationChannels.ALERTS)
-        manager.deleteNotificationChannel(NotificationChannels.STATUS)
+        val checker = AndroidNotificationHealthChecker(context)
 
-        val health = AndroidNotificationHealthChecker(context).read()
-
-        assertTrue(health.statusChannelEnabled)
-        assertTrue(health.alertsChannelEnabled)
+        assertTrue(checker.isChannelEnabled("com.codexquota.app.test.channel.that.does.not.exist"))
+        assertTrue(checker.isChannelEnabled(NotificationChannels.STATUS))
+        assertTrue(checker.isChannelEnabled(NotificationChannels.ALERTS))
     }
 
     // --- what actually lands in the shade --------------------------------------------------------
@@ -296,24 +287,6 @@ class NotificationPermissionTest {
      * [NotificationDeliveryDisabledTest]'s own workflow step. This class only ever needs the
      * opposite, so that is all it does.
      */
-    /** Waits until the platform reports the channel as gone. */
-    private fun awaitChannelAbsent(channelId: String, timeoutMillis: Long = CHANNEL_TIMEOUT_MILLIS) {
-        val deadline = System.currentTimeMillis() + timeoutMillis
-
-        while (System.currentTimeMillis() < deadline) {
-            if (manager.getNotificationChannel(channelId) == null) {
-                return
-            }
-
-            Thread.sleep(POLL_MILLIS)
-        }
-
-        throw AssertionError(
-            "channel " + channelId + " was still present " + timeoutMillis +
-                "ms after it was deleted, so it cannot be recreated at its normal importance",
-        )
-    }
-
     private fun setDeliveryEnabled(enabled: Boolean) {
         val packageName = context.packageName
         val permission = "android.permission.POST_NOTIFICATIONS"
@@ -430,6 +403,8 @@ class NotificationPermissionTest {
     private companion object {
         const val TIMEOUT_MILLIS = 10_000L
         const val POLL_MILLIS = 50L
-        const val CHANNEL_TIMEOUT_MILLIS = 5_000L
+
+        /** A channel of this test class's own, used to prove blocked channels are noticed. */
+        const val BLOCKED_TEST_CHANNEL = "com.codexquota.app.test.blocked_channel"
     }
 }

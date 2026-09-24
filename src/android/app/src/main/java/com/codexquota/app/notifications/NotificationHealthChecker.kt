@@ -51,6 +51,14 @@ data class NotificationHealth(
 interface NotificationHealthChecker {
     /** The current health. */
     fun read(): NotificationHealth
+
+    /**
+     * Whether the platform currently allows one channel to deliver.
+     *
+     * Exposed on its own so a caller can ask about a channel that is not one of the app's two, which
+     * is what lets a test check this logic without lowering a channel the app actually uses.
+     */
+    fun isChannelEnabled(channelId: String): Boolean
 }
 
 /**
@@ -61,15 +69,16 @@ interface NotificationHealthChecker {
  */
 class AndroidNotificationHealthChecker(private val context: Context) : NotificationHealthChecker {
 
-    override fun read(): NotificationHealth {
-        val compat = NotificationManagerCompat.from(context)
+    override fun read(): NotificationHealth = NotificationHealth(
+        permissionGranted = NotificationManagerCompat.from(context).areNotificationsEnabled(),
+        statusChannelEnabled = isChannelEnabled(NotificationChannels.STATUS),
+        alertsChannelEnabled = isChannelEnabled(NotificationChannels.ALERTS),
+    )
+
+    override fun isChannelEnabled(channelId: String): Boolean {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        return NotificationHealth(
-            permissionGranted = compat.areNotificationsEnabled(),
-            statusChannelEnabled = manager.isChannelEnabled(NotificationChannels.STATUS),
-            alertsChannelEnabled = manager.isChannelEnabled(NotificationChannels.ALERTS),
-        )
+        return manager.isChannelEnabled(channelId)
     }
 
     /**
