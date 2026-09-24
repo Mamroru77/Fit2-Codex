@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Chinese strings exist because the WATCH FIT 2 renders whatever the phone shows, and the spec
+  requires a Chinese compact option to be readable on it.
+-->
+<resources>
+    <string name="app_name">Codex 配额</string>
+
+    <string name="nav_dashboard">概览</string>
+    <string name="nav_history">历史</string>
+    <string name="nav_settings">设置</string>
+
+    <string name="dashboard_short_window">5小时</string>
+    <string name="dashboard_weekly">周</string>
+    <string name="dashboard_remaining">剩余</string>
+    <string name="dashboard_resets_at">%1$s 重置</string>
+    <string name="dashboard_last_update">%1$s 的数据</string>
+    <string name="dashboard_used">已用 %1$s</string>
+    <string name="dashboard_no_data">暂无数据</string>
+
+    <string name="state_real_time">实时</string>
+    <string name="state_reconnecting">重连中</string>
+    <string name="state_offline_cached">离线 / 缓存</string>
+    <string name="state_login_required">需要登录 Codex</string>
+    <string name="state_security_error">安全错误</string>
+
+    <string name="connection_title">Bridge 连接</string>
+    <string name="connection_paired_with">已配对 %1$s</string>
+    <string name="connection_not_paired">尚未配对任何 Bridge</string>
+    <string name="connection_searching">正在搜索局域网…</string>
+    <string name="connection_found">发现 %1$s</string>
+    <string name="connection_confirm_identity">请与 Windows 配对窗口上的校验码比对：%1$s</string>
+    <string name="connection_confirm">确认并配对</string>
+    <string name="connection_qr_hint">或粘贴 Windows 窗口上的配对码</string>
+    <string name="connection_pair_with_code">用配对码配对</string>
+    <string name="connection_unpair">忘记此 Bridge</string>
+    <string name="connection_security_explanation">该 Bridge 出示的身份与已固定的身份不一致。没有向它发送任何内容，也没有使用已保存的凭据。仅当您自己更换了 Bridge 时才重新配对。</string>
+    <string name="connection_repair_required">Bridge 已不再接受此手机，请重新配对。</string>
+    <string name="connection_pairing_rejected">Windows 端已拒绝本次配对。</string>
+    <string name="connection_pairing_expired">配对会话已过期，请重新开始。</string>
+    <string name="connection_pairing_timed_out">超时无人批准本次配对。</string>
+    <string name="connection_pairing_succeeded">配对成功，已固定 Bridge 身份。</string>
+    <string name="connection_lan_permission_required">需要授予局域网权限后才能访问 Bridge。</string>
+
+    <string name="history_available_after_sync">首次同步成功后，这里会显示 24 小时历史。</string>
+    <string name="history_title">最近 24 小时</string>
+    <string name="history_short_window">5小时</string>
+    <string name="history_weekly">周</string>
+    <string name="history_no_data">暂无历史数据。</string>
+    <string name="history_offline">正在显示已存历史；Bridge 当前不可达。</string>
+    <string name="history_gaps">断档表示该时段没有记录，不做插值。</string>
+    <string name="history_events">事件</string>
+    <string name="history_no_events">最近 24 小时没有事件。</string>
+
+    <string name="settings_title">设置</string>
+    <string name="settings_placeholder">告警与通知设置将随后台模式一并提供。</string>
+
+    <string name="settings_status_notification">常驻状态通知</string>
+    <string name="settings_alerts">低配额告警</string>
+    <string name="settings_repeat_critical">严重状态时重复提醒</string>
+    <string name="settings_mode">同步模式：%1$s</string>
+    <string name="settings_mode_off">关闭 — 后台不运行任何内容</string>
+    <string name="settings_mode_background">低功耗 — 每 15 分钟同步一次</string>
+    <string name="settings_mode_live">实时 — connectedDevice 前台服务</string>
+    <string name="settings_delivery_blocked">系统当前不会送达这些通知。请在 Android 的应用通知设置中检查。</string>
+    <string name="settings_live_resume_required">实时同步已启用但未运行。重启手机后它不会自行恢复。</string>
+    <string name="settings_live_resume">恢复实时同步</string>
+    <string name="settings_watch_display">手表显示</string>
+    <string name="settings_watch_compact">紧凑</string>
+    <string name="settings_watch_chinese">中文</string>
+    <string name="settings_send_test_notification">发送测试通知</string>
+    <string name="settings_test_notification_sent">已发送。请在手表上确认是否收到。</string>
+    <string name="settings_connection_section">Bridge 连接</string>
+</resources>

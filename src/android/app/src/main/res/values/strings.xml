@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Codex Quota</string>
+
+    <string name="nav_dashboard">Dashboard</string>
+    <string name="nav_history">History</string>
+    <string name="nav_settings">Settings</string>
+
+    <string name="dashboard_short_window">5h / short</string>
+    <string name="dashboard_weekly">Weekly</string>
+    <string name="dashboard_remaining">remaining</string>
+    <string name="dashboard_resets_at">Resets %1$s</string>
+    <string name="dashboard_last_update">Last update %1$s</string>
+    <string name="dashboard_used">used %1$s</string>
+    <string name="dashboard_no_data">No data yet</string>
+
+    <string name="state_real_time">Real-time</string>
+    <string name="state_reconnecting">Reconnecting</string>
+    <string name="state_offline_cached">Offline / cached</string>
+    <string name="state_login_required">Login required</string>
+    <string name="state_security_error">Security error</string>
+
+    <string name="connection_title">Bridge connection</string>
+    <string name="connection_paired_with">Paired with %1$s</string>
+    <string name="connection_not_paired">Not paired with a Bridge</string>
+    <string name="connection_searching">Searching the local network…</string>
+    <string name="connection_found">Found %1$s</string>
+    <string name="connection_confirm_identity">Compare this code with the one on the Windows pairing window: %1$s</string>
+    <string name="connection_confirm">Confirm and pair</string>
+    <string name="connection_qr_hint">Or paste the pairing code from the Windows window</string>
+    <string name="connection_pair_with_code">Pair with code</string>
+    <string name="connection_unpair">Forget this Bridge</string>
+    <string name="connection_security_explanation">The Bridge presented a different identity. Nothing was sent to it, and the stored credential was not used. Pair again only if you replaced the Bridge yourself.</string>
+    <string name="connection_repair_required">The Bridge no longer accepts this phone. Pair again.</string>
+    <string name="connection_pairing_rejected">The pairing was rejected on the Windows machine.</string>
+    <string name="connection_pairing_expired">The pairing session expired. Start a new one.</string>
+    <string name="connection_pairing_timed_out">Nobody approved the pairing in time.</string>
+    <string name="connection_pairing_succeeded">Paired. The Bridge identity is now pinned.</string>
+    <string name="connection_lan_permission_required">This phone needs permission to use the local network before it can reach the Bridge.</string>
+
+    <string name="history_available_after_sync">The 24-hour history appears here after the first successful sync.</string>
+    <string name="history_title">Last 24 hours</string>
+    <string name="history_short_window">5h / short</string>
+    <string name="history_weekly">Weekly</string>
+    <string name="history_no_data">No history stored yet.</string>
+    <string name="history_offline">Showing stored history; the Bridge is not reachable.</string>
+    <string name="history_gaps">Gaps are periods with no recorded sample and are not interpolated.</string>
+    <string name="history_events">Events</string>
+    <string name="history_no_events">No events in the last 24 hours.</string>
+
+    <string name="settings_title">Settings</string>
+    <string name="settings_placeholder">Alert and notification settings arrive with the background modes.</string>
+
+    <string name="settings_status_notification">Persistent status notification</string>
+    <string name="settings_alerts">Low-quota alerts</string>
+    <string name="settings_repeat_critical">Repeat while critical</string>
+    <string name="settings_mode">Sync mode: %1$s</string>
+    <string name="settings_mode_off">off — nothing runs in the background</string>
+    <string name="settings_mode_background">low power — one sync every 15 minutes</string>
+    <string name="settings_mode_live">live — a connected-device foreground service</string>
+    <string name="settings_delivery_blocked">The system is not delivering these notifications. Check the app’s notification settings in Android.</string>
+    <string name="settings_live_resume_required">Live sync is enabled but not running. It does not restart by itself after a reboot.</string>
+    <string name="settings_live_resume">Resume live sync</string>
+    <string name="settings_watch_display">Watch display</string>
+    <string name="settings_watch_compact">Compact</string>
+    <string name="settings_watch_chinese">Chinese</string>
+    <string name="settings_send_test_notification">Send test notification</string>
+    <string name="settings_test_notification_sent">Sent. Check the watch to see whether it arrived.</string>
+    <string name="settings_connection_section">Bridge connection</string>
+</resources>
