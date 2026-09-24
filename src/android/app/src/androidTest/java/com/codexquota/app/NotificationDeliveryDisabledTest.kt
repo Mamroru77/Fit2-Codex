@@ -20,6 +20,7 @@ import com.codexquota.app.notifications.QuotaNotificationManager
 import com.codexquota.app.sync.LocalNetworkPermissionState
 import com.codexquota.app.sync.SyncModeController
 import com.codexquota.app.sync.SyncScheduler
+import com.codexquota.app.ui.settings.SettingsUiState
 import com.codexquota.app.ui.settings.SettingsViewModel
 import java.time.Instant
 import kotlin.test.AfterTest
@@ -125,11 +126,34 @@ class NotificationDeliveryDisabledTest {
 
         viewModel.refresh()
 
-        val state = viewModel.state.value
+        // The stored preferences arrive on a flow, so the first state is the default one. Waiting
+        // for them is what a user sees after a frame, and asserting before they arrive tests the
+        // placeholder rather than the screen.
+        val state = awaitPreferences(viewModel)
 
         assertTrue(state.preferences.statusNotificationEnabled, "the user's choice is still recorded")
         assertFalse(state.statusDeliveryHealthy, "but delivery is not healthy")
         assertFalse(state.alertsDeliveryHealthy)
+    }
+
+    /** Waits until the screen has observed the stored preferences. */
+    private fun awaitPreferences(
+        viewModel: SettingsViewModel,
+        timeoutMillis: Long = 5_000L,
+    ): SettingsUiState {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+
+        while (System.currentTimeMillis() < deadline) {
+            val state = viewModel.state.value
+
+            if (state.preferences.statusNotificationEnabled) {
+                return state
+            }
+
+            Thread.sleep(50L)
+        }
+
+        throw AssertionError("the settings screen never observed the stored preferences")
     }
 
     @Test
