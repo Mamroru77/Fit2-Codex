@@ -70,6 +70,11 @@ public sealed class BridgeApiHost : IAsyncDisposable
 
         var application = builder.Build();
 
+        // Enables the WebSocket feature. It only makes the upgrade available: the endpoint still has
+        // to ask for it, and the authentication middleware still runs first, so an unauthenticated
+        // client can never reach AcceptWebSocketAsync.
+        application.UseWebSockets();
+
         application.UseRouting();
         application.UseDeviceAuthentication();
 
