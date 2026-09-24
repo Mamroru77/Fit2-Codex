@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Diagnostics;
 using CodexQuota.Codex.Protocol;
 
@@ -26,8 +25,9 @@ public interface ICodexProcess : IAsyncDisposable
 /// never be repaired by restarting. Exactly one drain therefore owns stderr for the whole child
 /// lifetime, from the moment the process starts until disposal.
 /// <para>
-/// V1 discards the lines. A later task attaches a redacting log sink through <c>onLine</c> without
-/// changing process lifetime, so no redesign is needed.
+/// The optional sink is isolated from the drain for the same reason: it is third-party code (a
+/// logging provider, a redactor, a diagnostic writer), and an exception from it must never be able
+/// to end the drain and bring the stall back.
 /// </para>
 /// </remarks>
 public static class CodexStandardErrorDrain
@@ -57,7 +57,7 @@ public static class CodexStandardErrorDrain
                     return;
                 }
 
-                onLine?.Invoke(line);
+                Publish(onLine, line);
             }
         }
         catch (Exception exception) when (exception is IOException
@@ -67,6 +67,24 @@ public static class CodexStandardErrorDrain
         {
             // The child died, stderr was disposed underneath the drain, or the drain is being
             // cancelled as part of shutdown: in every case the drain simply ends.
+        }
+    }
+
+    /// <summary>Hands one line to the sink without letting the sink end the drain.</summary>
+    private static void Publish(Action<string>? onLine, string line)
+    {
+        if (onLine is null)
+        {
+            return;
+        }
+
+        try
+        {
+            onLine(line);
+        }
+        catch (Exception)
+        {
+            // A throwing sink is a sink problem, not a reason to stop consuming stderr.
         }
     }
 }
@@ -86,7 +104,9 @@ public sealed class CodexAppServerProcess : ICodexProcess
     // Fully qualified because this file's namespace ends in ".Process", which would otherwise
     // shadow the System.Diagnostics.Process type.
     private readonly System.Diagnostics.Process _process;
+    private readonly ProcessTerminationHandle _handle;
     private readonly TextReader _standardError;
+    private readonly Action<string>? _onDiagnostic;
     private readonly CancellationTokenSource _drainShutdown;
     private readonly Task _stderrDrain;
 
@@ -94,17 +114,23 @@ public sealed class CodexAppServerProcess : ICodexProcess
         System.Diagnostics.Process process,
         IJsonRpcTransport transport,
         TextReader standardError,
+        Action<string>? onDiagnostic,
         CancellationTokenSource drainShutdown,
         Task stderrDrain)
     {
         _process = process;
+        _handle = new ProcessTerminationHandle(process);
         Transport = transport;
         _standardError = standardError;
+        _onDiagnostic = onDiagnostic;
         _drainShutdown = drainShutdown;
         _stderrDrain = stderrDrain;
     }
 
     public IJsonRpcTransport Transport { get; }
+
+    /// <summary>The OS process id, exposed for tests that must observe the real child.</summary>
+    internal int ProcessId => _process.Id;
 
     /// <summary>
     /// Builds the launch configuration for the supported App Server binary.
@@ -140,15 +166,31 @@ public sealed class CodexAppServerProcess : ICodexProcess
     /// <param name="appServerPath">Path of the supported <c>codex-app-server.exe</c>.</param>
     /// <param name="codexHomePath">Isolated <c>CODEX_HOME</c> for the child.</param>
     /// <param name="onStderrLine">
-    /// Optional sink for stderr lines. V1 passes nothing and discards them; a later task attaches
-    /// redacting logging here without changing process lifetime.
+    /// Optional sink for stderr lines, so the child's own diagnostics reach the log. It is isolated
+    /// from the drain: a sink that throws can never end the drain.
+    /// </param>
+    /// <param name="onDiagnostic">
+    /// Optional sink for lifecycle conditions the Bridge cannot fix by itself, such as a child that
+    /// survived termination.
     /// </param>
     public static CodexAppServerProcess Start(
         string appServerPath,
         string codexHomePath,
-        Action<string>? onStderrLine = null)
+        Action<string>? onStderrLine = null,
+        Action<string>? onDiagnostic = null)
+        => StartFrom(CreateStartInfo(appServerPath, codexHomePath), onStderrLine, onDiagnostic);
+
+    /// <summary>
+    /// Starts an already-configured child. The production path above builds the supported
+    /// <c>codex-app-server.exe</c> launch configuration; tests use this seam to exercise the real
+    /// process ownership and termination behaviour without a real App Server binary.
+    /// </summary>
+    internal static CodexAppServerProcess StartFrom(
+        ProcessStartInfo startInfo,
+        Action<string>? onStderrLine = null,
+        Action<string>? onDiagnostic = null)
     {
-        var startInfo = CreateStartInfo(appServerPath, codexHomePath);
+        ArgumentNullException.ThrowIfNull(startInfo);
 
         var process = System.Diagnostics.Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Could not start '{startInfo.FileName}'.");
@@ -163,7 +205,13 @@ public sealed class CodexAppServerProcess : ICodexProcess
             process.StandardInput.BaseStream,
             process.StandardOutput.BaseStream);
 
-        return new CodexAppServerProcess(process, transport, process.StandardError, drainShutdown, stderrDrain);
+        return new CodexAppServerProcess(
+            process,
+            transport,
+            process.StandardError,
+            onDiagnostic,
+            drainShutdown,
+            stderrDrain);
     }
 
     public async Task<int> WaitForExitAsync(CancellationToken cancellationToken)
@@ -176,8 +224,11 @@ public sealed class CodexAppServerProcess : ICodexProcess
     {
         try
         {
-            TerminateChild();
-            await WaitForChildExitAsync().ConfigureAwait(false);
+            // Bounded and best effort: shutdown must not hang waiting for a child that will not die,
+            // and a child that survives must be reported rather than silently abandoned.
+            await ChildProcessTermination
+                .TerminateAsync(_handle, ExitTimeout, _onDiagnostic, CancellationToken.None)
+                .ConfigureAwait(false);
 
             // Approved Task 3 semantics: disposing the transport aborts a blocked stdout reader,
             // so the child does not have to be gone for disposal to be deterministic.
@@ -189,48 +240,6 @@ public sealed class CodexAppServerProcess : ICodexProcess
 
             _drainShutdown.Dispose();
             _process.Dispose();
-        }
-    }
-
-    /// <summary>
-    /// Terminates the child. A process that exits between the <c>HasExited</c> check and
-    /// <c>Kill</c> is already gone, which is the goal anyway, so that race must not abort the rest
-    /// of the cleanup.
-    /// </summary>
-    private void TerminateChild()
-    {
-        try
-        {
-            if (!_process.HasExited)
-            {
-                _process.Kill(entireProcessTree: true);
-            }
-        }
-        catch (Exception exception) when (exception is InvalidOperationException
-                                              or Win32Exception
-                                              or NotSupportedException
-                                              or AggregateException)
-        {
-            // Already exited, already terminating, or not permitted: nothing is left to kill, and
-            // the remaining cleanup must still run.
-        }
-    }
-
-    /// <summary>
-    /// Waits for the child to be reaped, bounded so a kill that does not take effect cannot hang
-    /// disposal forever.
-    /// </summary>
-    private async Task WaitForChildExitAsync()
-    {
-        using var timeout = new CancellationTokenSource(ExitTimeout);
-
-        try
-        {
-            await _process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // The child is still alive: cleanup continues instead of waiting indefinitely.
         }
     }
 

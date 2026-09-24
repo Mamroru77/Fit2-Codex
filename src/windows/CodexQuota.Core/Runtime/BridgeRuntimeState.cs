@@ -113,6 +113,45 @@ public sealed class BridgeRuntimeState
             _current = updated;
         }
 
-        Changed?.Invoke(updated);
+        Notify(updated);
+    }
+
+    /// <summary>
+    /// Offers <paramref name="snapshot"/> to every subscriber, isolating each one.
+    /// </summary>
+    /// <remarks>
+    /// The change has already been applied when this runs, so it has to be reported as applied.
+    /// Subscribers are third-party code from the runtime's point of view — a UI binding, a log
+    /// sink — and a throw from one must not:
+    /// <list type="bullet">
+    /// <item>escape <c>Update</c> and make the caller believe the transition failed;</item>
+    /// <item>starve the subscribers registered behind it;</item>
+    /// <item>be mistaken for a quota-source failure. A successful quota read records itself through
+    /// this method, so an escaping observer exception used to surface as
+    /// <see cref="QuotaSourceStatus.SourceError"/> for a perfectly healthy source, and — because
+    /// the reconciliation watchdog reports errors through the same path — could end the watchdog
+    /// loop for good.</item>
+    /// </list>
+    /// </remarks>
+    private void Notify(BridgeRuntimeSnapshot snapshot)
+    {
+        var subscribers = Changed;
+
+        if (subscribers is null)
+        {
+            return;
+        }
+
+        foreach (var subscriber in subscribers.GetInvocationList().Cast<Action<BridgeRuntimeSnapshot>>())
+        {
+            try
+            {
+                subscriber(snapshot);
+            }
+            catch (Exception)
+            {
+                // One bad subscriber is not a broken Bridge.
+            }
+        }
     }
 }

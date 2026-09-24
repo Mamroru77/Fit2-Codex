@@ -444,7 +444,7 @@ public class CodexQuotaSyncServiceTests
     {
         private readonly CodexRpcClient _client;
 
-        internal SyncHarness()
+        internal SyncHarness(TimeSpan? watchdogInterval = null)
         {
             Transport = new FakeJsonRpcTransport();
             _client = new CodexRpcClient(Transport);
@@ -455,7 +455,8 @@ public class CodexQuotaSyncServiceTests
                 new CodexAccountService(_client),
                 new RateLimitAdapter(),
                 Store,
-                Runtime);
+                Runtime,
+                watchdogInterval);
         }
 
         internal FakeJsonRpcTransport Transport { get; }

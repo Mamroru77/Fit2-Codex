@@ -176,6 +176,17 @@ public sealed class HistoryPersistenceWorker : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Records the health flag and, when it changed, offers the new value to every subscriber in
+    /// isolation.
+    /// </summary>
+    /// <remarks>
+    /// This is called from inside the persistence failure path and from the recovery path, so an
+    /// escaping observer exception would do real damage in both directions: on failure it would
+    /// throw out of the catch block that reported the failure (a throw from inside a catch is not
+    /// caught by that same catch), ending <see cref="RunAsync"/> permanently; on recovery it would
+    /// be caught as if the write had failed and flip the flag back to unhealthy.
+    /// </remarks>
     private void SetHealthy(bool healthy)
     {
         bool changed;
@@ -185,9 +196,29 @@ public sealed class HistoryPersistenceWorker : IAsyncDisposable
             _healthy = healthy;
         }
 
-        if (changed)
+        if (!changed)
         {
-            PersistenceHealthChanged?.Invoke(healthy);
+            return;
+        }
+
+        var subscribers = PersistenceHealthChanged;
+
+        if (subscribers is null)
+        {
+            return;
+        }
+
+        foreach (var subscriber in subscribers.GetInvocationList().Cast<Action<bool>>())
+        {
+            try
+            {
+                subscriber(healthy);
+            }
+            catch (Exception)
+            {
+                // One bad subscriber must not cost the others the event, and must never be
+                // mistaken for a persistence failure.
+            }
         }
     }
 }

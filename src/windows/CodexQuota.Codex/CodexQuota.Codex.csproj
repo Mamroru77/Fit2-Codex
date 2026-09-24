@@ -4,6 +4,15 @@
     <ProjectReference Include="..\CodexQuota.Core\CodexQuota.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The child-process termination policy and the process launcher seam are internal lifecycle
+      details: keeping them internal leaves the published surface of this assembly unchanged, and
+      the test project is their only legitimate consumer.
+    -->
+    <InternalsVisibleTo Include="CodexQuota.Codex.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

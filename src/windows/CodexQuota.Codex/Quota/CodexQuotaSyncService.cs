@@ -43,6 +43,7 @@ public sealed class CodexQuotaSyncService : IAsyncDisposable
     private readonly RateLimitAdapter _adapter;
     private readonly IQuotaStateStore _store;
     private readonly BridgeRuntimeState _runtime;
+    private readonly TimeSpan _watchdogInterval;
 
     private readonly Channel<CodexNotification> _inbox = Channel.CreateUnbounded<CodexNotification>();
     private readonly CancellationTokenSource _shutdown = new();
@@ -54,12 +55,17 @@ public sealed class CodexQuotaSyncService : IAsyncDisposable
     private Task? _watchdog;
     private volatile bool _authenticated;
 
+    /// <param name="watchdogInterval">
+    /// Overrides <see cref="WatchdogInterval"/>. The interval is a seam so the reconciliation loop's
+    /// survival can be tested without waiting five real minutes.
+    /// </param>
     public CodexQuotaSyncService(
         CodexRpcClient client,
         CodexAccountService account,
         RateLimitAdapter adapter,
         IQuotaStateStore store,
-        BridgeRuntimeState runtime)
+        BridgeRuntimeState runtime,
+        TimeSpan? watchdogInterval = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(account);
@@ -72,6 +78,7 @@ public sealed class CodexQuotaSyncService : IAsyncDisposable
         _adapter = adapter;
         _store = store;
         _runtime = runtime;
+        _watchdogInterval = watchdogInterval ?? WatchdogInterval;
     }
 
     /// <summary>
@@ -93,6 +100,12 @@ public sealed class CodexQuotaSyncService : IAsyncDisposable
     /// Runs the startup sequence: initialize the App Server, read the account, and either read
     /// quota or expose <see cref="BridgeRuntimePhase.AuthRequired"/>.
     /// </summary>
+    /// <remarks>
+    /// Startup is all-or-nothing: it either completes with its background work running, or it
+    /// throws before any of that work has started. That is what makes a transient
+    /// <c>account/read</c> failure recoverable — the instance is left exactly as it was before the
+    /// call, so the same instance accepts a retry instead of rejecting it as "already started".
+    /// </remarks>
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         if (_notificationPump is not null)
@@ -103,11 +116,15 @@ public sealed class CodexQuotaSyncService : IAsyncDisposable
         _runtime.SetPhase(BridgeRuntimePhase.CodexInitializing);
         await _client.InitializeAsync(cancellationToken).ConfigureAwait(false);
 
-        _notificationPump = Task.Run(() => PumpNotificationsAsync(_shutdown.Token));
-        _notificationWorker = Task.Run(() => ProcessInboxAsync(_shutdown.Token));
-
         _runtime.SetPhase(BridgeRuntimePhase.CheckingAuth);
         var account = await _account.ReadAccountAsync(cancellationToken).ConfigureAwait(false);
+
+        // The notification pump and worker start only after the account read has succeeded. Started
+        // any earlier, a transient account/read failure would leave them consuming notifications for
+        // a service whose documented startup sequence never completed, and the guard above would
+        // make that same instance permanently non-retryable.
+        _notificationPump = Task.Run(() => PumpNotificationsAsync(_shutdown.Token));
+        _notificationWorker = Task.Run(() => ProcessInboxAsync(_shutdown.Token));
 
         await ApplyAccountAsync(account, resyncWhenAuthenticated: true, cancellationToken).ConfigureAwait(false);
     }
@@ -409,7 +426,7 @@ public sealed class CodexQuotaSyncService : IAsyncDisposable
 
     private async Task WatchdogLoopAsync(CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(WatchdogInterval);
+        using var timer = new PeriodicTimer(_watchdogInterval);
 
         try
         {

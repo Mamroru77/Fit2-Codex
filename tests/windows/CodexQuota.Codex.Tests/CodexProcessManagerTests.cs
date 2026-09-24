@@ -250,6 +250,30 @@ public class CodexProcessManagerTests
         Assert.True(launcher.Processes[0].IsDisposed);
     }
 
+    [Fact]
+    public async Task ExceptionalSupervisorExitReleasesTheRunningSession()
+    {
+        var launcher = new FakeCodexProcessLauncher();
+        var time = new FakeCodexTimeSource();
+        await using var manager = new CodexProcessManager(launcher.LaunchAsync, new RestartBackoff(), time);
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        await manager.StartAsync(timeout.Token);
+        Assert.NotNull(manager.CurrentSession);
+
+        // The supervisor can leave the loop exceptionally — not only through a child exit or a
+        // failed launch. That path used to skip the session cleanup the ordinary paths perform,
+        // so CurrentSession stayed non-null while nothing was being supervised, and the session
+        // was never disposed.
+        var faulted = WaitForStatusAsync(manager, CodexProcessStatus.Faulted);
+        launcher.Processes[0].Fault(new InvalidOperationException("supervisor failure"));
+        await faulted;
+
+        Assert.Equal(CodexProcessStatus.Faulted, manager.Status);
+        Assert.Null(manager.CurrentSession);
+        Assert.True(launcher.Processes[0].IsDisposed);
+    }
+
     private static async Task<CodexManagedSession?> TryStartAsync(
         CodexProcessManager manager,
         CancellationToken cancellationToken)
@@ -328,6 +352,12 @@ internal sealed class FakeCodexProcess : ICodexProcess
     public bool IsDisposed { get; private set; }
 
     public void Crash(int exitCode = 1) => _exited.TrySetResult(exitCode);
+
+    /// <summary>
+    /// Makes waiting for the child throw, the way an exceptional supervisor failure (a broken
+    /// process handle, an out-of-memory kill, a driver fault) reaches the supervisor.
+    /// </summary>
+    public void Fault(Exception exception) => _exited.TrySetException(exception);
 
     public Task<int> WaitForExitAsync(CancellationToken cancellationToken)
         => _exited.Task.WaitAsync(cancellationToken);
@@ -536,6 +566,46 @@ public class CodexStandardErrorDrainTests
         // fill and block the child.
         Assert.Equal(new[] { "warn: one", "warn: two" }, consumed);
         Assert.False(drain.IsCompleted);
+
+        reader.Complete();
+        await drain.WaitAsync(timeout.Token);
+
+        Assert.True(drain.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task AThrowingSinkNeverEndsTheDrain()
+    {
+        var reader = new ControllableStderrReader();
+        var consumed = new List<string>();
+        using var stop = new CancellationTokenSource();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+
+        var drain = CodexStandardErrorDrain.DrainAsync(
+            reader,
+            line =>
+            {
+                lock (consumed)
+                {
+                    consumed.Add(line);
+                }
+
+                if (line == "warn: one")
+                {
+                    throw new InvalidOperationException("log sink failure");
+                }
+            },
+            stop.Token);
+
+        reader.Enqueue("warn: one");
+        reader.Enqueue("warn: two");
+        await reader.WaitForReadsAsync(2, timeout.Token);
+
+        // A logging sink is third-party code from the drain's point of view. If its exception
+        // ended the drain, the child's stderr pipe would fill, the child would block inside its
+        // own write and never exit — the silent permanent stall the drain exists to prevent.
+        Assert.False(drain.IsCompleted);
+        Assert.Equal(new[] { "warn: one", "warn: two" }, consumed);
 
         reader.Complete();
         await drain.WaitAsync(timeout.Token);

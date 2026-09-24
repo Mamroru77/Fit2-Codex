@@ -255,11 +255,29 @@ public sealed class CodexProcessManager : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            // A failure to launch or supervise must surface to the caller of StartAsync rather
-            // than leaving it waiting forever. The session for the crashed process has already been
-            // cleaned up, so CurrentSession is null here.
-            SetStatus(CodexProcessStatus.Faulted);
+            // The supervisor can also leave the loop exceptionally — a faulted wait, a failing
+            // backoff or a throwing clock all land here without having passed through the ordinary
+            // exit path. The session must be reclaimed here too, otherwise CurrentSession would stay
+            // non-null while nothing is supervised and that session would never be disposed.
+            // Disposal is best effort: a failure there must not hide the original fault.
+            var session = Interlocked.Exchange(ref _currentSession, null);
+            if (session is not null)
+            {
+                try
+                {
+                    await session.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // The caller still needs the original fault, not this one.
+                }
+            }
+
+            // A failure to launch or supervise must surface to the caller of StartAsync rather than
+            // leaving it waiting forever. Releasing that caller first means a status observer that
+            // throws cannot turn this fault into a hang.
             _firstSession?.TrySetException(exception);
+            SetStatus(CodexProcessStatus.Faulted);
         }
     }
 
