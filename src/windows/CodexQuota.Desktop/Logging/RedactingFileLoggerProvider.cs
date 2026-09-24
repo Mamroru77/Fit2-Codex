@@ -1,3 +1,6 @@
+// System.IO is explicit on purpose: enabling UseWindowsForms replaces the SDK's default
+// implicit-usings set with a Windows-specific one that does not include System.IO.
+using System.IO;
 using System.Text;
 using CodexQuota.Core.Logging;
 using Microsoft.Extensions.Logging;

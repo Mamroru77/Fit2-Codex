@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Windows-only: the host under test is the WPF desktop host. No WPF type is touched
+         by these tests, so no dispatcher or STA thread is required. -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\windows\CodexQuota.Core\CodexQuota.Core.csproj" />
+    <ProjectReference Include="..\..\..\src\windows\CodexQuota.Codex\CodexQuota.Codex.csproj" />
+    <ProjectReference Include="..\..\..\src\windows\CodexQuota.Storage\CodexQuota.Storage.csproj" />
+    <ProjectReference Include="..\..\..\src\windows\CodexQuota.Desktop\CodexQuota.Desktop.csproj" />
+  </ItemGroup>
+
+</Project>
