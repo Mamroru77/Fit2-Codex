@@ -1,0 +1,20 @@
+{
+  "hours": 24,
+  "points": [
+    {
+      "timestamp": "2026-09-22T12:15:00Z",
+      "shortWindowRemainingPercent": 81.0,
+      "weeklyRemainingPercent": 60.0
+    },
+    {
+      "timestamp": "2026-09-22T12:45:00Z",
+      "shortWindowRemainingPercent": 74.0,
+      "weeklyRemainingPercent": 60.0
+    },
+    {
+      "timestamp": "2026-09-22T13:30:00Z",
+      "shortWindowRemainingPercent": 72.0,
+      "weeklyRemainingPercent": 54.0
+    }
+  ]
+}

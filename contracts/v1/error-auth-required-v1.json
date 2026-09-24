@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "CODEX_AUTH_REQUIRED",
+    "message": "Codex authentication is required.",
+    "retryable": false
+  }
+}
