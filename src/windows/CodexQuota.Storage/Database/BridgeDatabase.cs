@@ -47,7 +47,8 @@ public sealed class BridgeDatabase : IAsyncDisposable
             device_id TEXT NOT NULL PRIMARY KEY,
             display_name TEXT NULL,
             paired_at_utc TEXT NOT NULL,
-            revoked_at_utc TEXT NULL
+            revoked_at_utc TEXT NULL,
+            token_hash TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS bridge_metadata (
