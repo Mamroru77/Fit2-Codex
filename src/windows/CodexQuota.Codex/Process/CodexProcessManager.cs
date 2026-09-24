@@ -51,6 +51,21 @@ public sealed class CodexManagedSession : IAsyncDisposable
 /// unexpected exit using <see cref="RestartBackoff"/>, faults once the restart budget is
 /// exhausted, and never restarts after an explicit <see cref="StopAsync"/>.
 /// </summary>
+/// <remarks>
+/// <para>
+/// A manager instance is one-shot: it owns at most one supervisor and one lifetime. Automatic
+/// restart is the supervisor's job; a manual retry after <see cref="CodexProcessStatus.Faulted"/>
+/// creates a fresh manager together with a fresh <see cref="RestartBackoff"/>, so the crash budget
+/// starts clean.
+/// </para>
+/// <para>
+/// <see cref="CurrentSession"/> invariant: it is non-null exactly while a process is running
+/// (<see cref="CodexProcessStatus.Running"/>), and null in
+/// <see cref="CodexProcessStatus.Restarting"/>, <see cref="CodexProcessStatus.Faulted"/> and
+/// <see cref="CodexProcessStatus.Stopped"/>. Whoever removes a session from it owns disposing that
+/// session, so every session is disposed exactly once.
+/// </para>
+/// </remarks>
 public sealed class CodexProcessManager : IAsyncDisposable
 {
     private readonly Func<CancellationToken, Task<ICodexProcess>> _launchProcess;
@@ -62,6 +77,8 @@ public sealed class CodexProcessManager : IAsyncDisposable
     private TaskCompletionSource<CodexManagedSession>? _firstSession;
     private CodexManagedSession? _currentSession;
     private volatile bool _stopRequested;
+    private volatile bool _disposed;
+    private int _started;
     private volatile CodexProcessStatus _status = CodexProcessStatus.Stopped;
 
     /// <summary>
@@ -106,18 +123,29 @@ public sealed class CodexProcessManager : IAsyncDisposable
 
     /// <summary>
     /// Launches the first process, starts the restart supervisor, and completes once that first
-    /// process is running.
+    /// process is running. A manager can only be started once.
     /// </summary>
     public async Task<CodexManagedSession> StartAsync(CancellationToken cancellationToken)
     {
-        if (_supervisor is not null)
+        ThrowIfDisposed();
+
+        // One-shot gate: concurrent callers, a second call after Stop, and a second call after a
+        // fault are all rejected, so two supervisors (and therefore two child processes) can never
+        // exist for one manager.
+        if (Interlocked.Exchange(ref _started, 1) == 1)
         {
-            throw new InvalidOperationException("The Codex App Server supervisor has already been started.");
+            throw new InvalidOperationException(
+                "This Codex App Server manager has already been started; create a new manager to start again.");
         }
+
+        // Read the token on the caller's thread: if the manager is disposed concurrently the
+        // failure surfaces here instead of inside the supervisor, where it could leave the caller
+        // waiting for a session that will never be produced.
+        var supervisorToken = _shutdown.Token;
 
         var firstSession = new TaskCompletionSource<CodexManagedSession>(TaskCreationOptions.RunContinuationsAsynchronously);
         _firstSession = firstSession;
-        _supervisor = Task.Run(() => RunSupervisorAsync(_shutdown.Token));
+        _supervisor = Task.Run(() => RunSupervisorAsync(supervisorToken));
 
         return await firstSession.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -127,28 +155,40 @@ public sealed class CodexProcessManager : IAsyncDisposable
     /// </summary>
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        ThrowIfDisposed();
         _stopRequested = true;
 
-        await _shutdown.CancelAsync().ConfigureAwait(false);
-
-        var supervisor = Interlocked.Exchange(ref _supervisor, null);
-        if (supervisor is not null)
+        try
         {
-            await supervisor.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
+            await _shutdown.CancelAsync().ConfigureAwait(false);
 
-        var session = Interlocked.Exchange(ref _currentSession, null);
-        if (session is not null)
+            var supervisor = Interlocked.Exchange(ref _supervisor, null);
+            if (supervisor is not null)
+            {
+                await supervisor.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
         {
-            await session.DisposeAsync().ConfigureAwait(false);
-        }
+            // Ownership cleanup must not depend on the caller's token: cancellation may end the
+            // caller's wait, but it must never leave a live child, a non-null CurrentSession or a
+            // status outside Stopped behind. Whoever takes the session out of _currentSession owns
+            // disposing it, so it is disposed exactly once.
+            var session = Interlocked.Exchange(ref _currentSession, null);
+            if (session is not null)
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
 
-        SetStatus(CodexProcessStatus.Stopped);
+            SetStatus(CodexProcessStatus.Stopped);
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
         await StopAsync(CancellationToken.None).ConfigureAwait(false);
+
+        _disposed = true;
         _shutdown.Dispose();
     }
 
@@ -174,6 +214,16 @@ public sealed class CodexProcessManager : IAsyncDisposable
 
                 await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
 
+                // The process has exited: reclaim it now, before deciding what happens next. From
+                // here until a replacement is running there is no running process, so CurrentSession
+                // must be null — a caller can never observe a dead session, not even during the
+                // backoff delay.
+                var exited = Interlocked.Exchange(ref _currentSession, null);
+                if (exited is not null)
+                {
+                    await exited.DisposeAsync().ConfigureAwait(false);
+                }
+
                 if (_stopRequested)
                 {
                     break;
@@ -197,13 +247,27 @@ public sealed class CodexProcessManager : IAsyncDisposable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             SetStatus(CodexProcessStatus.Stopped);
+
+            // A StopAsync that races the very first launch still has to release a waiting
+            // StartAsync caller, which would otherwise wait forever for a session that will never
+            // be produced.
+            _firstSession?.TrySetCanceled(cancellationToken);
         }
         catch (Exception exception)
         {
             // A failure to launch or supervise must surface to the caller of StartAsync rather
-            // than leaving it waiting forever.
+            // than leaving it waiting forever. The session for the crashed process has already been
+            // cleaned up, so CurrentSession is null here.
             SetStatus(CodexProcessStatus.Faulted);
             _firstSession?.TrySetException(exception);
+        }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(CodexProcessManager));
         }
     }
 
