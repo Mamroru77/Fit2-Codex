@@ -44,6 +44,12 @@ class LiveBridgeService : Service() {
     override fun onCreate() {
         super.onCreate()
 
+        // The channels have to exist before the foreground notification is posted. The platform
+        // rejects `startForeground` with "Bad notification for startForeground" when the notification
+        // names a channel that does not exist, and the service can be the first thing in the process
+        // to post one: a fresh install where the user turns live sync on has created no channels yet.
+        NotificationChannels.ensureCreated(this)
+
         isRunning = true
     }
 

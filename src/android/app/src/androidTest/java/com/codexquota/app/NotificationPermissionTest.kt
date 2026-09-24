@@ -258,6 +258,8 @@ class NotificationPermissionTest {
         val posted = manager.activeNotifications.firstOrNull { it.notification.channelId == NotificationChannels.STATUS }
 
         assertNotNull(posted, "the test notification must use the status channel")
+
+        Unit
     }
 
     // --- helpers --------------------------------------------------------------------------------

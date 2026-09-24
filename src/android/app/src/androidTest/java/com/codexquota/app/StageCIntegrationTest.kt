@@ -386,6 +386,8 @@ class StageCIntegrationTest {
 
         // The distinction matters: offline is retried, a security error is not.
         assertIs<RefreshResult.Offline>(result)
+
+        Unit
     }
 
     /** A storage double, so the test never touches the device's real pairing file. */
