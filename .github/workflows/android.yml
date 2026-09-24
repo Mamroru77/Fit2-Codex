@@ -341,9 +341,15 @@ jobs:
 
                   for case in root.iter('testcase'):
                       for failure in list(case.iter('failure')) + list(case.iter('error')):
-                          message = (failure.get('message') or '').splitlines()
+                          # AGP writes the reason into the element text, not the message attribute,
+                          # so reading only the attribute prints nothing at all.
+                          text = (failure.get('message') or '').strip() or (failure.text or '').strip()
+                          lines = [line.strip() for line in text.splitlines() if line.strip()]
+
                           print(f"  FAILED {case.get('classname')}.{case.get('name')}")
-                          print('    ' + (message[0][:400] if message else '<no message>'))
+
+                          for line in lines[:3]:
+                              print('    ' + line[:300])
           PY
 
       - name: Publish the instrumentation results
