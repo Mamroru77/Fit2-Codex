@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      V1 talks to the Bridge over the LAN only, and never over cleartext HTTP.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      mDNS/DNS-SD discovery uses multicast, which Android gates behind this permission.
+    -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!--
+      ACCESS_LOCAL_NETWORK exists from API 37. Requesting it on an older platform would fail, so the
+      runtime request is made only when the platform has it, behind LocalNetworkPermissionController.
+      Declaring it here is harmless on older platforms.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+
+    <!--
+      Live sync runs as a connectedDevice foreground service. The type matters: Android documents
+      connectedDevice for maintaining a connection to an external device, and dataSync is subject to
+      a six-hour-per-day background limit that all-day live sync would hit.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+    <!--
+      Required from Android 13 to show either notification. The app checks it before claiming that
+      notifications are being delivered.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      Deliberately absent: RECEIVE_BOOT_COMPLETED. V1 does not start live sync from boot; the setting
+      survives, and the user resumes it from the app.
+    -->
+
+    <application
+        android:name=".CodexQuotaApplication"
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.CodexQuota"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.CodexQuota">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The live-mode service. `connectedDevice` is the declared type, and the service is not
+          exported because only this app starts it.
+        -->
+        <service
+            android:name=".sync.LiveBridgeService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+    </application>
+
+</manifest>

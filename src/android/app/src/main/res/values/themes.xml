@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The UI is Compose, so this theme only has to provide a window background and no action bar.
+      It deliberately does not depend on AppCompat: the activity is a ComponentActivity.
+    -->
+    <style name="Theme.CodexQuota" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

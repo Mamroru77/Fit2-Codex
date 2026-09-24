@@ -30,6 +30,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The first run downloads the whole dependency graph. Caching it makes every later run a
+      # build rather than a download, which matters because this job is the only place the Android
+      # app is ever compiled.
+      - name: Set up Gradle with dependency caching
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Report the toolchain versions
         run: |
           java -version
@@ -87,8 +93,11 @@ jobs:
       - name: Accept the SDK licences and install the build platform
         run: |
           yes | sdkmanager --licenses > /dev/null
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-          sdkmanager --list_installed | grep -E 'platforms;android-35|build-tools;35.0.0'
+
+          # The package is named platforms;android-37.0, not android-37: API 37 ships as a minor
+          # release. Installing the exact package the build asks for avoids a resolver surprise.
+          sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
+          sdkmanager --list_installed | grep -E 'platforms;android-37|build-tools;37.0.0'
 
       - name: Report the available toolchain versions
         run: |

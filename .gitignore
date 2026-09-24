@@ -3,6 +3,16 @@
 [Oo]bj/
 artifacts/
 
+# Android / Gradle build output. The Gradle wrapper itself is committed on purpose: the wrapper
+# JAR, the two launcher scripts and gradle-wrapper.properties are the pinned build entry point.
+**/build/
+.gradle/
+local.properties
+*.apk
+*.aab
+*.hprof
+captures/
+
 # Test results
 [Tt]est[Rr]esult*/
 *.trx
