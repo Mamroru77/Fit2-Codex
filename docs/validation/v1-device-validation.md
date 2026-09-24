@@ -1,6 +1,20 @@
 # V1 Device Validation Record
 
-**Status:** `DEVELOPMENT COMPLETE` · `AUTOMATED VERIFICATION COMPLETE` · `PHYSICAL STAGE E VALIDATION PENDING`
+**Status:** `ANDROID DEVELOPMENT IN PROGRESS` · `PHYSICAL STAGE E VALIDATION PENDING`
+
+Earlier revisions of this file said `DEVELOPMENT COMPLETE` while also saying that Stage C and Stage D
+were not implemented. That was premature and has been corrected. The truthful status is:
+
+```text
+WINDOWS DEVELOPMENT COMPLETE
+STAGE B COMPLETE
+ANDROID DEVELOPMENT IN PROGRESS
+PHYSICAL STAGE E VALIDATION PENDING
+```
+
+Android development is "in progress" rather than complete because the approved plans' instrumented
+tests (Stage C Task 8 and Stage D Task 8) have not been written or run. Everything that can be
+verified without a device is verified below.
 
 Every row below is an acceptance criterion from the approved spec (§33) and the Stage E plan. Rows
 that require the physical chain are marked **PENDING_MANUAL_DEVICE_VALIDATION** and were **not**
@@ -11,8 +25,8 @@ run. Nothing in this file claims a physical result that was not observed.
 | Item | Value |
 |---|---|
 | Windows build | _to be recorded on the day_ |
-| Bridge commit | `10dcef0` (fill in the exact commit used for the run) |
-| Android APK commit | _not produced — see the Android status below_ |
+| Bridge commit (final) | `d28514c` |
+| Android APK commit | `d28514c` — the first commit at which the Android application builds |
 | OPPO Find X8 Android / ColorOS | _to be recorded on the day_ |
 | HUAWEI Health version | _to be recorded on the day_ |
 | HUAWEI WATCH FIT 2 firmware | _to be recorded on the day_ |
@@ -23,7 +37,9 @@ run. Nothing in this file claims a physical result that was not observed.
 |---|---|---|
 | Windows Release suite | `dotnet test src/windows/CodexQuota.sln -c Release` | 266 passed, 0 failed |
 | Real Codex runtime | `dotnet run -c Release --project tests/windows/CodexQuota.RealRuntimeCheck` | PASS (4/4 checks) |
-| Android toolchain (CI) | GitHub Actions `Android`, run 35978620889 | success |
+| Android unit tests | `gradlew :app:testDebugUnitTest` | 168 passed, 0 failed |
+| Android build + lint (CI) | GitHub Actions `Android`, run `35997777459` | see the Android status section |
+| Android toolchain (CI) | GitHub Actions `Android`, run `35978620889` | success |
 
 ## Physical acceptance matrix
 
@@ -80,19 +96,46 @@ workaround is implemented — and none has been.
 
 ## Android status
 
-Stage C and Stage D have **not** been implemented, so there is no APK and rows 4–19 cannot be
-attempted yet. The blocker was the development machine's network, not the plan:
+Stage C and Stage D are implemented. The application builds, lints and passes its unit tests on a
+GitHub-hosted runner, which is the authoritative gate because this development machine cannot reach
+`dl.google.com` or `maven.google.com`:
 
-| Host | From this machine |
-|---|---|
-| `dl.google.com/android/repository` | `curl: (7) CONNECT tunnel failed, response 502` |
-| `dl.google.com/dl/android/maven2` (AGP) | `curl: (7) CONNECT tunnel failed, response 502` |
-| `maven.google.com` | `curl: (35) schannel: handshake failed` |
+| Host | From this machine | From a GitHub runner |
+|---|---|---|
+| `dl.google.com/android/repository` | `curl: (7) CONNECT tunnel failed, response 502` | HTTP 200 |
+| `dl.google.com/dl/android/maven2` (AGP) | `curl: (7) CONNECT tunnel failed, response 502` | HTTP 200 |
+| `maven.google.com` | `curl: (35) schannel: handshake failed` | HTTP 200 |
 
-A GitHub-hosted runner is not blocked: the CI job reaches the SDK repository, Google Maven (AGP,
-AndroidX, WorkManager) and Maven Central, and has the SDK preinstalled. The `Android` workflow is
-therefore the intended Stage C/D gate and will run `testDebugUnitTest lintDebug assembleDebug`
-automatically once `src/android` exists.
+| Gate | Where | Result |
+|---|---|---|
+| `testDebugUnitTest` | CI run `35997777459` | PASS — the task ran and the build succeeded; the same 168 tests pass on this machine |
+| `lintDebug` | CI run `35997777459` | PASS — no errors (lint aborts the build on any) |
+| `assembleDebug` | CI run `35997777459` | PASS |
+| Build | CI run `35997777459` | `BUILD SUCCESSFUL in 3m 24s`, 53 tasks executed |
+| APK artifact | CI run `35997777459` | `android-reports.zip`, 12,979,799 bytes, artifact id `10806923407` |
+| APK path inside the artifact | — | `outputs/apk/debug/app-debug.apk` (the artifact root is `app/build`) |
+| Local APK | this machine | `artifacts/android/app-debug.apk`, 36,497,614 bytes, SHA-256 `8e593df8ebf95d3394c8271a9119966bf099a1d29a81a68e5d0882615a61b8f0` |
+
+The CI artifact of run `35997777459` predates a workflow fix that adds `app/build/test-results/**`
+to the uploaded paths. That run's JUnit XML was therefore not preserved, so its unit-test result rests
+on the task having run and the build having succeeded, plus the identical suite passing locally. Later
+runs carry the XML.
+
+The same 168 tests also pass on this machine, which is how the five defects listed in the execution
+ledger were found.
+
+### What is not verified, and why
+
+- **Instrumented tests.** The approved plans' Stage C Task 8 and Stage D Task 8 call for
+  `connectedDebugAndroidTest`. No instrumentation source has been written, because there is no
+  emulator on this machine and the CI job does not start one. Rows 4–19 below therefore cannot be
+  attempted from either environment yet.
+- **The `_codexquota._tcp` discovery adapter** is compiled and linted but has no automated test: the
+  real `NsdManager` needs a device, and a fake would only test the fake.
+- **`KeystoreSecretBox`** is compiled and linted but not unit-tested: the Android Keystore is not
+  available on the JVM. Its contract is narrow (seal/open with AES/GCM under a non-exportable key) and
+  everything above it depends on the `SecretBox` interface, which is tested with an authenticated
+  fake.
 
 ## Install commands
 
@@ -104,10 +147,18 @@ Windows (once the package is published to `artifacts/windows`):
 artifacts\windows\CodexQuota.Desktop.exe
 ```
 
-Android (once an APK exists):
+Android (download `android-reports.zip` from CI run `35997777459`, then):
 
 ```powershell
-adb install -r artifacts\android\app-debug.apk
+adb install -r app-debug.apk
+```
+
+Or build it locally:
+
+```powershell
+cd src\android
+.\gradlew.bat assembleDebug
+adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
 ## Diagnostics

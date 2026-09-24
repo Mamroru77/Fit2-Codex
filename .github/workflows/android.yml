@@ -144,9 +144,13 @@ jobs:
         with:
           name: android-reports
           if-no-files-found: ignore
+          # The APK, the human-readable lint report, and the raw JUnit XML. The XML matters because
+          # it is the only machine-readable record of which tests ran and what they asserted; without
+          # it the artifact proves the build succeeded but not what was verified.
           path: |
             src/android/app/build/reports/**
             src/android/app/build/outputs/apk/**
+            src/android/app/build/test-results/**
 
       - name: Summarise
         if: always()
